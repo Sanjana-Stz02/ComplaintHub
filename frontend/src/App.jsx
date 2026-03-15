@@ -219,6 +219,37 @@ export default function App() {
           ))
         )}
       </section>
+
+      <section className="card">
+        <h3>Help Center (FAQ)</h3>
+        <p>Need help? Here are some common questions and answers about ComplaintHub.</p>
+        <ul className="faq-list">
+          <li>
+            <strong>Q: How do I submit a complaint?</strong>
+            <div>A: Fill in the title and description in the "Submit Complaint" form and click "Create Complaint".</div>
+          </li>
+          <li>
+            <strong>Q: How can I track my complaint status?</strong>
+            <div>A: Use the "Track Status by Complaint ID" section and enter the ID provided after submission.</div>
+          </li>
+          <li>
+            <strong>Q: How do I change complaint status or priority?</strong>
+            <div>A: Admin users can update status and priority using the controls in the admin sections.</div>
+          </li>
+          <li>
+            <strong>Q: What does each status mean?</strong>
+            <div>
+              A: Pending = waiting assignment, Assigned = assigned to worker, In Progress = being serviced, Resolved = completed, Rejected = rejected.
+            </div>
+          </li>
+          <li>
+            <strong>Q: What priority level should I choose?</strong>
+            <div>
+              A: Use Low for minor issues and Emergency for urgent safety-related problems. Admin can update if needed.
+            </div>
+          </li>
+        </ul>
+      </section>
     </div>
   );
 }
