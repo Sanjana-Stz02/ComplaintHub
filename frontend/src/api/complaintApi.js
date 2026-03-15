@@ -82,3 +82,117 @@ export const searchComplaints = async (query) => {
 
   return response.json();
 };
+
+export const getComplaintHistory = async ({ userId, role, archived }) => {
+  const params = new URLSearchParams();
+
+  if (userId) {
+    params.set("userId", userId);
+  }
+
+  if (role) {
+    params.set("role", role);
+  }
+
+  if (archived !== undefined) {
+    params.set("archived", `${archived}`);
+  }
+
+  const response = await fetch(`${API_BASE_URL}/complaints/history?${params.toString()}`);
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return response.json();
+};
+
+export const signUp = async (data) => {
+  const response = await fetch(`${API_BASE_URL}/auth/signup`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(data)
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return response.json();
+};
+
+export const login = async (data) => {
+  const response = await fetch(`${API_BASE_URL}/auth/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(data)
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return response.json();
+};
+
+export const requestLoginOtp = async (email) => {
+  const response = await fetch(`${API_BASE_URL}/auth/login/request-otp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ email })
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return response.json();
+};
+
+export const verifyLoginOtp = async ({ email, otp }) => {
+  const response = await fetch(`${API_BASE_URL}/auth/login/verify-otp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ email, otp })
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return response.json();
+};
+
+export const getUsers = async (requesterId) => {
+  const response = await fetch(`${API_BASE_URL}/auth/users?requesterId=${encodeURIComponent(requesterId)}`);
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return response.json();
+};
+
+export const updateUserRole = async ({ requesterId, userId, role }) => {
+  const response = await fetch(`${API_BASE_URL}/auth/users/${userId}/role`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ requesterId, role })
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return response.json();
+};

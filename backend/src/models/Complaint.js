@@ -27,6 +27,16 @@ const complaintSchema = new mongoose.Schema(
       required: true,
       trim: true
     },
+    citizenId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+    submittedBy: {
+      type: String,
+      required: true,
+      trim: true
+    },
     status: {
       type: String,
       enum: STATUS_VALUES,
@@ -36,13 +46,17 @@ const complaintSchema = new mongoose.Schema(
       type: String,
       enum: PRIORITY_VALUES,
       default: "Low"
+    },
+    isArchived: {
+      type: Boolean,
+      default: false
     }
   },
   { timestamps: true }
 );
 
-export const Complaint = mongoose.model("Complaint", complaintSchema);
-export { STATUS_VALUES, PRIORITY_VALUES };
-
 // Create text index for search
 complaintSchema.index({ title: 'text', description: 'text' });
+
+export const Complaint = mongoose.model("Complaint", complaintSchema);
+export { STATUS_VALUES, PRIORITY_VALUES };

@@ -1,6 +1,8 @@
 import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
+import { ensureDefaultAdmin } from "./controllers/authController.js";
+import authRoutes from "./routes/authRoutes.js";
 import complaintRoutes from "./routes/complaintRoutes.js";
 import { connectDB } from "./config/db.js";
 
@@ -16,10 +18,12 @@ app.get("/api/health", (_req, res) => {
   res.status(200).json({ message: "Server is running" });
 });
 
+app.use("/api/auth", authRoutes);
 app.use("/api/complaints", complaintRoutes);
 
 connectDB()
-  .then(() => {
+  .then(async () => {
+    await ensureDefaultAdmin();
     app.listen(PORT, '127.0.0.1', () => {
       console.log(`Server listening on port ${PORT}`);
     });
