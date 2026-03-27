@@ -181,16 +181,6 @@ export const getUsers = async (requesterId) => {
   return response.json();
 };
 
-export const getComplaintMapLocations = async () => {
-  const response = await fetch(`${API_BASE_URL}/complaints/map/locations`);
-
-  if (!response.ok) {
-    throw new Error(await parseError(response));
-  }
-
-  return response.json();
-};
-
 export const assignComplaint = async (complaintId, { adminId, assigneeUserId }) => {
   const response = await fetch(`${API_BASE_URL}/complaints/${encodeURIComponent(complaintId)}/assign`, {
     method: "PATCH",

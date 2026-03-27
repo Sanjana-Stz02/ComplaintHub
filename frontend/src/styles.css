@@ -430,6 +430,37 @@ button:hover {
   margin-top: 12px;
 }
 
+.history-archive-card .section-heading {
+  margin-bottom: 12px;
+}
+
+.history-item-map {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.history-item-map-label {
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: #334155;
+}
+
+.history-item-map-missing {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.45);
+  color: #94a3b8;
+}
+
+.leaflet-map-wrap--mini {
+  margin-top: 0;
+}
+
+.leaflet-map--mini {
+  height: 200px;
+}
+
 @media (max-width: 720px) {
   .container {
     padding: 16px;

@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { Complaint, PRIORITY_VALUES, STATUS_VALUES } from "../models/Complaint.js";
 import { User } from "../models/User.js";
+import { geocodeAddressToLatLng } from "../utils/geocode.js";
 
 const createComplaintId = () => {
   const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, "");
@@ -42,23 +43,52 @@ export const createComplaint = async (req, res) => {
 
     let locationPayload = { lat: null, lng: null, address: "" };
 
-    if (location && (location.lat != null || location.lng != null)) {
-      if (location.lat == null || location.lng == null) {
+    if (location && typeof location === "object") {
+      const addressStr = typeof location.address === "string" ? location.address.trim() : "";
+      const sentLat = location.lat;
+      const sentLng = location.lng;
+      const userSentAnyCoord = sentLat !== undefined && sentLat !== null && sentLng !== undefined && sentLng !== null;
+      const userSentPartialCoord =
+        (sentLat !== undefined && sentLat !== null && (sentLng === undefined || sentLng === null)) ||
+        (sentLng !== undefined && sentLng !== null && (sentLat === undefined || sentLat === null));
+
+      if (userSentPartialCoord) {
         return res.status(400).json({ message: "Location must include both latitude and longitude." });
       }
 
-      const lat = Number(location.lat);
-      const lng = Number(location.lng);
+      let lat = userSentAnyCoord ? Number(sentLat) : null;
+      let lng = userSentAnyCoord ? Number(sentLng) : null;
 
-      if (Number.isNaN(lat) || Number.isNaN(lng)) {
+      let hasCoords =
+        userSentAnyCoord && lat != null && lng != null && !Number.isNaN(lat) && !Number.isNaN(lng);
+
+      if (userSentAnyCoord && !hasCoords) {
         return res.status(400).json({ message: "Invalid location coordinates." });
       }
 
-      locationPayload = {
-        lat,
-        lng,
-        address: typeof location.address === "string" ? location.address.trim() : ""
-      };
+      if (!hasCoords && addressStr.length >= 3) {
+        const geocoded = await geocodeAddressToLatLng(addressStr);
+
+        if (geocoded) {
+          lat = geocoded.lat;
+          lng = geocoded.lng;
+          hasCoords = true;
+        }
+      }
+
+      if (hasCoords) {
+        locationPayload = {
+          lat,
+          lng,
+          address: addressStr
+        };
+      } else if (addressStr.length > 0) {
+        locationPayload = {
+          lat: null,
+          lng: null,
+          address: addressStr
+        };
+      }
     }
 
     const photo =

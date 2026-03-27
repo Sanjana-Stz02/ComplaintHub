@@ -4,7 +4,6 @@ import {
   assignComplaint,
   createComplaint,
   getComplaintHistory,
-  getComplaintMapLocations,
   getComplaintStatus,
   getUsers,
   login as loginUser,
@@ -75,7 +74,6 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [userAdminMessage, setUserAdminMessage] = useState("");
   const [roleSelections, setRoleSelections] = useState({});
-  const [mapComplaints, setMapComplaints] = useState([]);
   const [assigneeUserId, setAssigneeUserId] = useState("");
   const [assignMessage, setAssignMessage] = useState("");
   const [workComplaintId, setWorkComplaintId] = useState("");
@@ -137,15 +135,6 @@ export default function App() {
     }
   };
 
-  const loadMapComplaints = async () => {
-    try {
-      const nextMap = await getComplaintMapLocations();
-      setMapComplaints(nextMap);
-    } catch {
-      setMapComplaints([]);
-    }
-  };
-
   useEffect(() => {
     if (!currentUser) {
       return;
@@ -156,16 +145,6 @@ export default function App() {
 
   useEffect(() => {
     loadUsers();
-  }, [currentUser]);
-
-  useEffect(() => {
-    if (!currentUser) {
-      setMapComplaints([]);
-      return undefined;
-    }
-
-    loadMapComplaints();
-    return undefined;
   }, [currentUser]);
 
   useEffect(() => {
@@ -246,7 +225,6 @@ export default function App() {
     setCurrentUser(null);
     setComplaints([]);
     setUsers([]);
-    setMapComplaints([]);
     setTrackId("");
     setTrackedComplaint(null);
     setTrackError("");
@@ -355,11 +333,17 @@ export default function App() {
         submissionPhoto
       };
 
+      const trimmedAddress = locationAddress.trim();
+
       if (geoLocation) {
         payload.location = {
           lat: geoLocation.lat,
           lng: geoLocation.lng,
-          address: locationAddress
+          address: trimmedAddress
+        };
+      } else if (trimmedAddress.length > 0) {
+        payload.location = {
+          address: trimmedAddress
         };
       }
 
@@ -373,7 +357,6 @@ export default function App() {
       setSubmissionPhotoFile(null);
       setSuggestions([]);
       await loadComplaints();
-      await loadMapComplaints();
     } catch (error) {
       setSubmitError(error.message);
     }
@@ -406,7 +389,6 @@ export default function App() {
       }
 
       await loadComplaints();
-      await loadMapComplaints();
     } catch (error) {
       setAdminMessage(error.message);
     }
@@ -426,7 +408,6 @@ export default function App() {
       }
 
       await loadComplaints();
-      await loadMapComplaints();
     } catch (error) {
       setAdminMessage(error.message);
     }
@@ -464,7 +445,6 @@ export default function App() {
       });
       setAssignMessage(`Assigned ${updated.complaintId} to ${updated.assignedTo?.fullName || "assignee"}.`);
       await loadComplaints();
-      await loadMapComplaints();
 
       if (trackId.trim() === updated.complaintId) {
         const tracked = await getComplaintStatus(updated.complaintId);
@@ -649,12 +629,6 @@ export default function App() {
         </div>
       </section>
 
-      <section className="card">
-        <h3>Complaints map (by location)</h3>
-        <p className="small">Pins show complaints that include GPS coordinates. Anyone signed in can view this map.</p>
-        <ComplaintsMap complaints={mapComplaints} />
-      </section>
-
       {currentUser.role === "Citizen" ? (
         <section className="card">
           <h3>Submit Complaint</h3>
@@ -680,8 +654,12 @@ export default function App() {
             <input
               value={locationAddress}
               onChange={(event) => setLocationAddress(event.target.value)}
-              placeholder="e.g., Dhanmondi 15, Dhaka"
+              placeholder="e.g., 1 Kuratoli, Dhaka 1229"
             />
+            <p className="small geo-hint muted">
+              Type a full address or area: the server looks it up on OpenStreetMap and saves map coordinates. You can
+              also use the GPS button below instead of typing, or use both (GPS + address label).
+            </p>
 
             <div className="location-row">
               <button type="button" className="secondary-button" onClick={handleUseLocation}>
@@ -689,10 +667,10 @@ export default function App() {
               </button>
               {geoLocation ? (
                 <span className="small geo-hint">
-                  Saved: {geoLocation.lat.toFixed(5)}, {geoLocation.lng.toFixed(5)}
+                  GPS saved: {geoLocation.lat.toFixed(5)}, {geoLocation.lng.toFixed(5)}
                 </span>
               ) : (
-                <span className="small geo-hint muted">Location is optional but enables the map pin.</span>
+                <span className="small geo-hint muted">GPS is optional if your typed address is found.</span>
               )}
             </div>
             {geoError ? <div className="error">{geoError}</div> : null}
@@ -981,16 +959,16 @@ export default function App() {
         </section>
       ) : null}
 
-      <section className="card">
+      <section className="card history-archive-card">
         <div className="section-heading">
           <div>
             <h3>Complaint History and Archive</h3>
             <p className="small">
               {currentUser.role === "Admin" || currentUser.role === "Super Admin"
-                ? "Admins can see all complaints and switch between active and archived records."
+                ? "Admins can see all complaints and switch between active and archived records. Each row can include its own map when coordinates were saved."
                 : isWorkerOrMp
-                  ? "You see complaints assigned to you. Use filters to focus on active or archived items."
-                  : "Citizens can see their complaint history, including archived resolved or rejected items."}
+                  ? "You see complaints assigned to you. Each entry may show a location map if the citizen provided one."
+                  : "Citizens can see their complaint history, including archived items. A small map appears on each complaint that has a saved location."}
             </p>
           </div>
           <div className="filter-row">
@@ -1001,30 +979,42 @@ export default function App() {
         </div>
 
         {complaints.length === 0 ? <div className="small">No complaints found for this view.</div> : null}
-        {complaints.map((complaint) => (
-          <article key={complaint._id} className="history-item">
-            <div className="history-topline">
-              <strong>{complaint.complaintId}</strong>
-              <span className={complaint.isArchived ? "archive-pill archived" : "archive-pill active-archive"}>
-                {complaint.isArchived ? "Archived" : "Active"}
-              </span>
-            </div>
-            <div>{complaint.title}</div>
-            <div className="small">{complaint.description}</div>
-            <div className="small">Status: {complaint.status} | Priority: {complaint.priority}</div>
-            <div className="small">Submitted by: {complaint.citizenId?.fullName || complaint.submittedBy}</div>
-            {complaint.assignedTo ? (
-              <div className="small">
-                Assigned to: {complaint.assignedTo.fullName} ({complaint.assignedTo.role})
+        {complaints.map((complaint) => {
+          const hasMapLocation =
+            complaint.location &&
+            typeof complaint.location.lat === "number" &&
+            typeof complaint.location.lng === "number";
+
+          return (
+            <article key={complaint._id} className="history-item">
+              <div className="history-topline">
+                <strong>{complaint.complaintId}</strong>
+                <span className={complaint.isArchived ? "archive-pill archived" : "archive-pill active-archive"}>
+                  {complaint.isArchived ? "Archived" : "Active"}
+                </span>
               </div>
-            ) : null}
-            <div className="small">
-              Map location:{" "}
-              {complaint.location?.lat != null && complaint.location?.lng != null ? "Yes" : "Not provided"}
-            </div>
-            <div className="small">Created: {formatDate(complaint.createdAt)}</div>
-          </article>
-        ))}
+              <div>{complaint.title}</div>
+              <div className="small">{complaint.description}</div>
+              <div className="small">Status: {complaint.status} | Priority: {complaint.priority}</div>
+              <div className="small">Submitted by: {complaint.citizenId?.fullName || complaint.submittedBy}</div>
+              {complaint.assignedTo ? (
+                <div className="small">
+                  Assigned to: {complaint.assignedTo.fullName} ({complaint.assignedTo.role})
+                </div>
+              ) : null}
+              <div className="small">Created: {formatDate(complaint.createdAt)}</div>
+
+              {hasMapLocation ? (
+                <div className="history-item-map">
+                  <div className="small history-item-map-label">Location</div>
+                  <ComplaintsMap complaints={[complaint]} variant="mini" />
+                </div>
+              ) : (
+                <div className="small history-item-map-missing">No map location was provided for this complaint.</div>
+              )}
+            </article>
+          );
+        })}
       </section>
 
       {!isAdmin ? (
