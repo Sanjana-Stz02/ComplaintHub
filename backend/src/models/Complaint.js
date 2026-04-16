@@ -139,6 +139,10 @@ const complaintSchema = new mongoose.Schema(
       type: Boolean,
       default: false
     },
+    deadline: {
+      type: Date,
+      default: null
+    },
     category: {
       type: String,
       enum: CATEGORY_VALUES,

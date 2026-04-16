@@ -1,12 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  addComment,
   addProgressUpdate,
   assignComplaint,
   createComplaint,
   filterComplaints,
   getCategoryReports,
-  getComments,
   getComplaintHistory,
   getComplaintStatus,
   getNotifications,
@@ -18,12 +16,27 @@ import {
   requestLoginOtp,
   searchComplaints,
   signUp,
+  updateComplaintDeadline,
   updateComplaintPriority,
   updateComplaintStatus,
   updateUserRole,
   verifyLoginOtp
 } from "./api/complaintApi";
 import ComplaintsMap from "./components/ComplaintsMap.jsx";
+import StatusTimeline from "./components/StatusTimeline.jsx";
+import FaqAccordion from "./components/FaqAccordion.jsx";
+import CategoryReportsChart from "./components/CategoryReportsChart.jsx";
+import InlineComments from "./components/InlineComments.jsx";
+import ComplaintCard from "./components/ComplaintCard.jsx";
+import Sidebar from "./components/Sidebar.jsx";
+import Topbar from "./components/Topbar.jsx";
+import Icon from "./components/Icon.jsx";
+import {
+  deadlineBadge,
+  formatDate,
+  priorityClass,
+  statusClass
+} from "./utils/format";
 
 const STATUS_VALUES = ["Pending", "Assigned", "In Progress", "Resolved", "Rejected"];
 const PRIORITY_VALUES = ["Low", "Medium", "High", "Emergency"];
@@ -34,14 +47,30 @@ const CATEGORY_VALUES = [
 ];
 const ROLE_ASSIGN_OPTIONS = ["Citizen", "Worker", "MP", "Admin"];
 const STORAGE_KEY = "complainthub-user";
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+const MAX_DESCRIPTION = 1000;
 
-const formatDate = (value) => {
-  if (!value) {
-    return "N/A";
-  }
+const FAQ_CITIZEN = [
+  { q: "How do I submit a complaint?", a: "Go to Submit, fill in the title, description, and optional photo/location. A unique complaint ID is generated for tracking." },
+  { q: "How do I track a complaint?", a: "Open Track and enter the complaint ID. You'll see a visual progress timeline, the assigned worker, and a discussion thread." },
+  { q: "How do notifications work?", a: "Click the bell in the header. You'll see real-time updates on status changes, assignments, comments, and worker progress." },
+  { q: "Where are my past complaints?", a: "Open History and switch between All, Active, and Archived tabs to see every complaint you've filed." },
+  { q: "Can I discuss a complaint with workers or admins?", a: "Yes. Expand any complaint card and use the Discussion section \u2014 everyone involved can post updates." },
+  { q: "What's the OTP login for?", a: "Instead of a password, request a one-time passcode by email. Useful if you forget your password." }
+];
 
-  return new Date(value).toLocaleString();
-};
+const FAQ_WORKER = [
+  { q: "Where are my assigned tasks?", a: "Open Tasks. You'll see active tasks with deadlines, priority, and overdue/due-soon highlighting." },
+  { q: "How do I post a progress update?", a: "Go to Progress, pick the complaint, add a note and optional photo, then submit. Mark 'complete' when the task is finished." },
+  { q: "Can I comment on a complaint?", a: "Yes. Expand any task card and use the Discussion section to communicate with the citizen and admins." }
+];
+
+const FAQ_ADMIN = [
+  { q: "How do I assign a complaint?", a: "Open Controls \u2192 Assign. Enter the complaint ID, pick a worker or MP, and optionally set a deadline." },
+  { q: "How do deadlines work?", a: "Deadlines help workers prioritize. Overdue tasks are flagged red on the worker dashboard and notifications are sent when a deadline changes." },
+  { q: "Where are categorized reports?", a: "Reports shows a chart and breakdown (pending, assigned, in progress, resolved, rejected, resolution rate) by category." },
+  { q: "How do I filter complaints?", a: "Open Complaints. Combine status, category, priority, area, assignee, date range, and keywords. Active filters show as dismissible chips." }
+];
 
 const fileToDataUrl = (file) =>
   new Promise((resolve, reject) => {
@@ -51,8 +80,11 @@ const fileToDataUrl = (file) =>
     reader.readAsDataURL(file);
   });
 
+const roleKey = (role) => (role || "").toLowerCase().replace(/\s+/g, "-");
+
 export default function App() {
-  const [authMode, setAuthMode] = useState("signup");
+  // Auth state
+  const [authMode, setAuthMode] = useState("login");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -64,6 +96,7 @@ export default function App() {
   const [authError, setAuthError] = useState("");
   const [currentUser, setCurrentUser] = useState(null);
 
+  // Submit complaint
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [complaintCategory, setComplaintCategory] = useState("Other");
@@ -71,17 +104,23 @@ export default function App() {
   const [geoLocation, setGeoLocation] = useState(null);
   const [geoError, setGeoError] = useState("");
   const [submissionPhotoFile, setSubmissionPhotoFile] = useState(null);
+  const [submissionPhotoPreview, setSubmissionPhotoPreview] = useState("");
+  const [photoError, setPhotoError] = useState("");
+  const [creating, setCreating] = useState(false);
   const [newComplaint, setNewComplaint] = useState(null);
   const [submitError, setSubmitError] = useState("");
   const [suggestions, setSuggestions] = useState([]);
 
+  // Track
   const [trackId, setTrackId] = useState("");
   const [trackedComplaint, setTrackedComplaint] = useState(null);
   const [trackError, setTrackError] = useState("");
 
+  // Admin
   const [adminId, setAdminId] = useState("");
   const [adminStatus, setAdminStatus] = useState("Assigned");
   const [adminPriority, setAdminPriority] = useState("Medium");
+  const [adminDeadline, setAdminDeadline] = useState("");
   const [adminMessage, setAdminMessage] = useState("");
   const [complaints, setComplaints] = useState([]);
   const [historyFilter, setHistoryFilter] = useState("all");
@@ -89,13 +128,16 @@ export default function App() {
   const [userAdminMessage, setUserAdminMessage] = useState("");
   const [roleSelections, setRoleSelections] = useState({});
   const [assigneeUserId, setAssigneeUserId] = useState("");
+  const [assignDeadline, setAssignDeadline] = useState("");
   const [assignMessage, setAssignMessage] = useState("");
+
+  // Worker
   const [workComplaintId, setWorkComplaintId] = useState("");
   const [workUpdateText, setWorkUpdateText] = useState("");
   const [workPhotoFile, setWorkPhotoFile] = useState(null);
   const [workMessage, setWorkMessage] = useState("");
 
-  // Search & Filter state
+  // Filters
   const [filterStatus, setFilterStatus] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
   const [filterPriority, setFilterPriority] = useState("");
@@ -103,47 +145,41 @@ export default function App() {
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
   const [filterKeyword, setFilterKeyword] = useState("");
+  const [filterAssignee, setFilterAssignee] = useState("");
   const [filterResults, setFilterResults] = useState([]);
   const [filterMessage, setFilterMessage] = useState("");
-  const [showFilterPanel, setShowFilterPanel] = useState(false);
+  const [showFilterPanel, setShowFilterPanel] = useState(true);
+  const [filterRan, setFilterRan] = useState(false);
 
-  // Notification state
+  // Notifications
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
 
-  // Worker Dashboard state
+  // Dashboards
   const [workerDashData, setWorkerDashData] = useState(null);
-
-  // Comment / Discussion state
-  const [commentComplaintId, setCommentComplaintId] = useState("");
-  const [commentText, setCommentText] = useState("");
-  const [commentList, setCommentList] = useState([]);
-  const [commentMessage, setCommentMessage] = useState("");
-
-  // Category Reports state
   const [categoryReports, setCategoryReports] = useState([]);
 
+  // UI
+  const [expandedCommentId, setExpandedCommentId] = useState("");
+  const [activeView, setActiveView] = useState("overview");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Restore user
   useEffect(() => {
     const rawUser = window.localStorage.getItem(STORAGE_KEY);
-
-    if (!rawUser) {
-      return;
-    }
-
-    try {
-      setCurrentUser(JSON.parse(rawUser));
-    } catch {
-      window.localStorage.removeItem(STORAGE_KEY);
-    }
+    if (!rawUser) return;
+    try { setCurrentUser(JSON.parse(rawUser)); }
+    catch { window.localStorage.removeItem(STORAGE_KEY); }
   }, []);
 
-  const loadComplaints = async (user = currentUser, nextFilter = historyFilter) => {
-    if (!user) {
-      setComplaints([]);
-      return;
-    }
+  const isAdmin = currentUser?.role === "Admin" || currentUser?.role === "Super Admin";
+  const isWorkerOrMp = currentUser?.role === "Worker" || currentUser?.role === "MP";
+  const isCitizen = currentUser?.role === "Citizen";
 
+  // Data loaders
+  const loadComplaints = async (user = currentUser, nextFilter = historyFilter) => {
+    if (!user) { setComplaints([]); return; }
     try {
       const list = await getComplaintHistory({
         userId: user.id,
@@ -151,400 +187,318 @@ export default function App() {
         archived: nextFilter === "all" ? undefined : nextFilter === "archived"
       });
       setComplaints(list);
-    } catch {
-      setComplaints([]);
-    }
+    } catch { setComplaints([]); }
   };
 
   const loadUsers = async (user = currentUser) => {
-    if (!user || !["Admin", "Super Admin"].includes(user.role)) {
-      setUsers([]);
-      return;
-    }
-
+    if (!user || !["Admin", "Super Admin"].includes(user.role)) { setUsers([]); return; }
     try {
       const nextUsers = await getUsers(user.id);
       setUsers(nextUsers);
       const nextSelections = {};
-      nextUsers.forEach((nextUser) => {
-        nextSelections[nextUser.id] = nextUser.role;
-      });
+      nextUsers.forEach((u) => { nextSelections[u.id] = u.role; });
       setRoleSelections(nextSelections);
-      const firstAssignable = nextUsers.find((nextUser) => ["Worker", "MP"].includes(nextUser.role));
+      const firstAssignable = nextUsers.find((u) => ["Worker", "MP"].includes(u.role));
       setAssigneeUserId((previous) => previous || firstAssignable?.id || "");
-    } catch {
-      setUsers([]);
-      setRoleSelections({});
-    }
+    } catch { setUsers([]); setRoleSelections({}); }
   };
 
   const loadNotifications = async (user = currentUser) => {
-    if (!user) {
-      setNotifications([]);
-      setUnreadCount(0);
-      return;
-    }
-
+    if (!user) { setNotifications([]); setUnreadCount(0); return; }
     try {
       const data = await getNotifications(user.id);
       setNotifications(data.notifications);
       setUnreadCount(data.unreadCount);
-    } catch {
-      setNotifications([]);
-      setUnreadCount(0);
-    }
+    } catch { setNotifications([]); setUnreadCount(0); }
   };
 
   const loadWorkerDashboard = async (user = currentUser) => {
-    if (!user || !["Worker", "MP"].includes(user.role)) {
-      setWorkerDashData(null);
-      return;
-    }
-
-    try {
-      const data = await getWorkerDashboard(user.id);
-      setWorkerDashData(data);
-    } catch {
-      setWorkerDashData(null);
-    }
+    if (!user || !["Worker", "MP"].includes(user.role)) { setWorkerDashData(null); return; }
+    try { setWorkerDashData(await getWorkerDashboard(user.id)); }
+    catch { setWorkerDashData(null); }
   };
 
   const loadCategoryReports = async (user = currentUser) => {
-    if (!user || !["Admin", "Super Admin"].includes(user.role)) {
-      setCategoryReports([]);
-      return;
-    }
-
-    try {
-      const data = await getCategoryReports();
-      setCategoryReports(data);
-    } catch {
-      setCategoryReports([]);
-    }
+    if (!user || !["Admin", "Super Admin"].includes(user.role)) { setCategoryReports([]); return; }
+    try { setCategoryReports(await getCategoryReports()); }
+    catch { setCategoryReports([]); }
   };
 
-  useEffect(() => {
-    if (!currentUser) {
-      return;
-    }
-
-    loadComplaints();
-  }, [currentUser, historyFilter]);
-
-  useEffect(() => {
-    loadUsers();
-  }, [currentUser]);
-
+  useEffect(() => { if (currentUser) loadComplaints(); }, [currentUser, historyFilter]);
+  useEffect(() => { loadUsers(); }, [currentUser]);
   useEffect(() => {
     if (!currentUser) return;
     loadNotifications();
     const interval = setInterval(() => loadNotifications(), 30000);
     return () => clearInterval(interval);
   }, [currentUser]);
+  useEffect(() => { if (currentUser) loadWorkerDashboard(); }, [currentUser]);
+  useEffect(() => { if (currentUser) loadCategoryReports(); }, [currentUser]);
 
+  // Similarity suggestions while typing
   useEffect(() => {
-    if (!currentUser) return;
-    loadWorkerDashboard();
-  }, [currentUser]);
-
-  useEffect(() => {
-    if (!currentUser) return;
-    loadCategoryReports();
-  }, [currentUser]);
-
-  useEffect(() => {
-    if (title.trim().length < 3) {
-      setSuggestions([]);
-      return undefined;
-    }
-
+    if (title.trim().length < 3) { setSuggestions([]); return undefined; }
     const timeoutId = window.setTimeout(async () => {
-      try {
-        const results = await searchComplaints(title);
-        setSuggestions(results);
-      } catch {
-        setSuggestions([]);
-      }
+      try { setSuggestions(await searchComplaints(title)); }
+      catch { setSuggestions([]); }
     }, 400);
-
     return () => window.clearTimeout(timeoutId);
   }, [title]);
 
   useEffect(() => {
     const role = currentUser?.role;
     const isAssignable = role === "Worker" || role === "MP";
-
-    if (!isAssignable || complaints.length === 0) {
-      return undefined;
-    }
-
-    setWorkComplaintId((previous) => {
-      if (previous && complaints.some((item) => item.complaintId === previous)) {
-        return previous;
-      }
-
-      return complaints[0].complaintId;
-    });
+    if (!isAssignable || complaints.length === 0) return undefined;
+    setWorkComplaintId((prev) =>
+      prev && complaints.some((i) => i.complaintId === prev) ? prev : complaints[0].complaintId
+    );
     return undefined;
   }, [complaints, currentUser]);
 
+  // Role-aware nav items
+  const navItems = useMemo(() => {
+    if (isAdmin) {
+      return [
+        { id: "overview", label: "Overview", icon: "dashboard" },
+        { id: "complaints", label: "Complaints", icon: "search" },
+        { id: "track", label: "Track", icon: "map" },
+        { id: "users", label: "Users", icon: "users" },
+        { id: "controls", label: "Controls", icon: "settings" },
+        { id: "reports", label: "Reports", icon: "chart" },
+        { id: "help", label: "Help", icon: "help" }
+      ];
+    }
+    if (isWorkerOrMp) {
+      return [
+        { id: "overview", label: "Overview", icon: "dashboard" },
+        { id: "tasks", label: "My Tasks", icon: "inbox" },
+        { id: "progress", label: "Post Update", icon: "upload" },
+        { id: "track", label: "Track", icon: "map" },
+        { id: "help", label: "Help", icon: "help" }
+      ];
+    }
+    return [
+      { id: "overview", label: "Overview", icon: "dashboard" },
+      { id: "submit", label: "Submit", icon: "plus" },
+      { id: "track", label: "Track", icon: "map" },
+      { id: "history", label: "History", icon: "history" },
+      { id: "help", label: "Help", icon: "help" }
+    ];
+  }, [isAdmin, isWorkerOrMp]);
+
+  useEffect(() => {
+    if (!navItems.some((n) => n.id === activeView)) {
+      setActiveView(navItems[0]?.id || "overview");
+    }
+  }, [navItems, activeView]);
+
+  const activeFilterChips = useMemo(() => {
+    const chips = [];
+    if (filterStatus) chips.push({ label: `Status: ${filterStatus}`, clear: () => setFilterStatus("") });
+    if (filterCategory) chips.push({ label: `Category: ${filterCategory}`, clear: () => setFilterCategory("") });
+    if (filterPriority) chips.push({ label: `Priority: ${filterPriority}`, clear: () => setFilterPriority("") });
+    if (filterArea) chips.push({ label: `Area: ${filterArea}`, clear: () => setFilterArea("") });
+    if (filterDateFrom) chips.push({ label: `From: ${filterDateFrom}`, clear: () => setFilterDateFrom("") });
+    if (filterDateTo) chips.push({ label: `To: ${filterDateTo}`, clear: () => setFilterDateTo("") });
+    if (filterKeyword) chips.push({ label: `Keyword: ${filterKeyword}`, clear: () => setFilterKeyword("") });
+    if (filterAssignee) {
+      const label = filterAssignee === "unassigned"
+        ? "Unassigned"
+        : `Assignee: ${users.find((u) => u.id === filterAssignee)?.fullName || "User"}`;
+      chips.push({ label, clear: () => setFilterAssignee("") });
+    }
+    return chips;
+  }, [filterStatus, filterCategory, filterPriority, filterArea, filterDateFrom, filterDateTo, filterKeyword, filterAssignee, users]);
+
+  // Handlers
   const handleAuthSubmit = async (event) => {
     event.preventDefault();
-    setAuthError("");
-    setAuthMessage("");
-
+    setAuthError(""); setAuthMessage("");
     try {
       if (authMode === "signup") {
         await signUp({ fullName, email, phone, password });
-        setAuthMessage("Account created successfully. Please log in using your credentials.");
-        setAuthMode("login");
-        setLoginMethod("password");
-        setFullName("");
-        setEmail("");
-        setPhone("");
-        setPassword("");
-        setOtpCode("");
-        setOtpPreview("");
+        setAuthMessage("Account created. Please log in below.");
+        setAuthMode("login"); setLoginMethod("password");
+        setFullName(""); setEmail(""); setPhone(""); setPassword("");
+        setOtpCode(""); setOtpPreview("");
         return;
       }
-
       if (loginMethod !== "password") {
-        setAuthError("Use the OTP button flow for OTP login.");
+        setAuthError("Use the OTP buttons below for OTP login.");
         return;
       }
-
       const response = await loginUser({ identifier: email, password });
-
       setCurrentUser(response.user);
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(response.user));
-      setPassword("");
-      setOtpCode("");
-      setOtpPreview("");
-      setAuthMessage(`Logged in as ${response.user.fullName}.`);
-    } catch (error) {
-      setAuthError(error.message);
-    }
-  };
-
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setComplaints([]);
-    setUsers([]);
-    setTrackId("");
-    setTrackedComplaint(null);
-    setTrackError("");
-    setGeoLocation(null);
-    setGeoError("");
-    setLocationAddress("");
-    setSubmissionPhotoFile(null);
-    setAssigneeUserId("");
-    setAssignMessage("");
-    setWorkComplaintId("");
-    setWorkUpdateText("");
-    setWorkPhotoFile(null);
-    setWorkMessage("");
-    setAuthError("");
-    setAuthMessage("");
-    setRoleSelections({});
-    setAuthMode("login");
-    setLoginMethod("password");
-    setFullName("");
-    setEmail("");
-    setPhone("");
-    setPassword("");
-    setOtpCode("");
-    setOtpPreview("");
-    setNotifications([]);
-    setUnreadCount(0);
-    setShowNotifications(false);
-    setWorkerDashData(null);
-    setCategoryReports([]);
-    setFilterResults([]);
-    setFilterMessage("");
-    setCommentComplaintId("");
-    setCommentList([]);
-    setCommentText("");
-    setCommentMessage("");
-    window.localStorage.removeItem(STORAGE_KEY);
+      setPassword(""); setOtpCode(""); setOtpPreview("");
+    } catch (error) { setAuthError(error.message); }
   };
 
   const handleRequestOtpLogin = async () => {
-    setAuthError("");
-    setAuthMessage("");
-
+    setAuthError(""); setAuthMessage("");
     try {
       const response = await requestLoginOtp(email);
       setOtpPreview(response.otpPreview || "");
       setAuthMessage(response.message || "OTP sent. Enter it below to log in.");
-    } catch (error) {
-      setOtpPreview("");
-      setAuthError(error.message);
-    }
+    } catch (error) { setOtpPreview(""); setAuthError(error.message); }
   };
 
   const handleVerifyOtpLogin = async () => {
-    setAuthError("");
-    setAuthMessage("");
-
+    setAuthError(""); setAuthMessage("");
     try {
       const response = await verifyLoginOtp({ email, otp: otpCode });
       setCurrentUser(response.user);
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(response.user));
-      setPassword("");
-      setOtpCode("");
-      setOtpPreview("");
-      setAuthMessage(`Logged in as ${response.user.fullName}.`);
-    } catch (error) {
-      setAuthError(error.message);
-    }
+      setPassword(""); setOtpCode(""); setOtpPreview("");
+    } catch (error) { setAuthError(error.message); }
   };
 
-  const totalComplaints = complaints.length;
-  const archivedComplaints = complaints.filter((complaint) => complaint.isArchived).length;
-  const activeComplaints = totalComplaints - archivedComplaints;
-  const isAdmin = currentUser?.role === "Admin" || currentUser?.role === "Super Admin";
-  const isWorkerOrMp = currentUser?.role === "Worker" || currentUser?.role === "MP";
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setComplaints([]); setUsers([]);
+    setTrackId(""); setTrackedComplaint(null); setTrackError("");
+    setGeoLocation(null); setGeoError(""); setLocationAddress("");
+    setSubmissionPhotoFile(null); setSubmissionPhotoPreview(""); setPhotoError("");
+    setAssigneeUserId(""); setAssignDeadline(""); setAssignMessage("");
+    setWorkComplaintId(""); setWorkUpdateText(""); setWorkPhotoFile(null); setWorkMessage("");
+    setAuthError(""); setAuthMessage(""); setRoleSelections({});
+    setAuthMode("login"); setLoginMethod("password");
+    setFullName(""); setEmail(""); setPhone(""); setPassword("");
+    setOtpCode(""); setOtpPreview("");
+    setNotifications([]); setUnreadCount(0); setShowNotifications(false);
+    setWorkerDashData(null); setCategoryReports([]);
+    setFilterResults([]); setFilterMessage(""); setExpandedCommentId("");
+    setActiveView("overview");
+    window.localStorage.removeItem(STORAGE_KEY);
+  };
 
   const handleRoleUpdate = async (userId) => {
     setUserAdminMessage("");
-
     const role = roleSelections[userId];
-
     try {
       const response = await updateUserRole({
-        requesterId: currentUser.id,
-        userId,
-        role
+        requesterId: currentUser.id, userId, role
       });
-
       setUserAdminMessage(response.message);
-
       if (response.user.id === currentUser.id) {
         setCurrentUser(response.user);
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(response.user));
       }
-
       await loadUsers();
-    } catch (error) {
-      setUserAdminMessage(error.message);
+    } catch (error) { setUserAdminMessage(error.message); }
+  };
+
+  const handlePhotoChange = (event) => {
+    const file = event.target.files?.[0] || null;
+    setPhotoError("");
+    if (!file) { setSubmissionPhotoFile(null); setSubmissionPhotoPreview(""); return; }
+    if (file.size > MAX_PHOTO_BYTES) {
+      setPhotoError("Photo is too large. Please upload an image under 5 MB.");
+      setSubmissionPhotoFile(null); setSubmissionPhotoPreview("");
+      event.target.value = "";
+      return;
     }
+    setSubmissionPhotoFile(file);
+    const reader = new FileReader();
+    reader.onload = () => setSubmissionPhotoPreview(reader.result);
+    reader.readAsDataURL(file);
   };
 
   const handleCreate = async (event) => {
     event.preventDefault();
-    setSubmitError("");
-    setNewComplaint(null);
-
+    setSubmitError(""); setNewComplaint(null); setCreating(true);
     try {
       let submissionPhoto = "";
-
-      if (submissionPhotoFile) {
-        submissionPhoto = await fileToDataUrl(submissionPhotoFile);
-      }
+      if (submissionPhotoFile) submissionPhoto = await fileToDataUrl(submissionPhotoFile);
 
       const payload = {
-        title,
-        description,
+        title, description,
         citizenId: currentUser.id,
         category: complaintCategory,
         submissionPhoto
       };
 
       const trimmedAddress = locationAddress.trim();
-
       if (geoLocation) {
-        payload.location = {
-          lat: geoLocation.lat,
-          lng: geoLocation.lng,
-          address: trimmedAddress
-        };
+        payload.location = { lat: geoLocation.lat, lng: geoLocation.lng, address: trimmedAddress };
       } else if (trimmedAddress.length > 0) {
-        payload.location = {
-          address: trimmedAddress
-        };
+        payload.location = { address: trimmedAddress };
       }
 
       const created = await createComplaint(payload);
       setNewComplaint(created);
-      setTitle("");
-      setDescription("");
-      setComplaintCategory("Other");
-      setLocationAddress("");
-      setGeoLocation(null);
-      setGeoError("");
-      setSubmissionPhotoFile(null);
+      setTitle(""); setDescription(""); setComplaintCategory("Other");
+      setLocationAddress(""); setGeoLocation(null); setGeoError("");
+      setSubmissionPhotoFile(null); setSubmissionPhotoPreview(""); setPhotoError("");
       setSuggestions([]);
       await loadComplaints();
-    } catch (error) {
-      setSubmitError(error.message);
-    }
+    } catch (error) { setSubmitError(error.message); }
+    finally { setCreating(false); }
   };
 
   const handleTrack = async (event) => {
     event.preventDefault();
-    setTrackError("");
-    setTrackedComplaint(null);
-
-    try {
-      const result = await getComplaintStatus(trackId.trim());
-      setTrackedComplaint(result);
-    } catch (error) {
-      setTrackError(error.message);
-    }
+    setTrackError(""); setTrackedComplaint(null);
+    try { setTrackedComplaint(await getComplaintStatus(trackId.trim())); }
+    catch (error) { setTrackError(error.message); }
   };
 
   const handleAdminUpdate = async (event) => {
     event.preventDefault();
     setAdminMessage("");
-
     try {
       const updated = await updateComplaintStatus(adminId.trim(), adminStatus, currentUser.id);
-      setAdminMessage(`Updated ${updated.complaintId} to ${updated.status}`);
-
+      setAdminMessage(`Updated ${updated.complaintId} to ${updated.status}.`);
       if (trackId.trim() === updated.complaintId) {
-        const tracked = await getComplaintStatus(updated.complaintId);
-        setTrackedComplaint(tracked);
+        setTrackedComplaint(await getComplaintStatus(updated.complaintId));
       }
-
       await loadComplaints();
-    } catch (error) {
-      setAdminMessage(error.message);
-    }
+      await loadCategoryReports();
+    } catch (error) { setAdminMessage(error.message); }
   };
 
   const handlePriorityUpdate = async (event) => {
     event.preventDefault();
     setAdminMessage("");
-
     try {
       const updated = await updateComplaintPriority(adminId.trim(), adminPriority, currentUser.id);
-      setAdminMessage(`Updated ${updated.complaintId} priority to ${updated.priority}`);
-
+      setAdminMessage(`Updated ${updated.complaintId} priority to ${updated.priority}.`);
       if (trackId.trim() === updated.complaintId) {
-        const tracked = await getComplaintStatus(updated.complaintId);
-        setTrackedComplaint(tracked);
+        setTrackedComplaint(await getComplaintStatus(updated.complaintId));
       }
-
       await loadComplaints();
-    } catch (error) {
-      setAdminMessage(error.message);
-    }
+    } catch (error) { setAdminMessage(error.message); }
+  };
+
+  const handleDeadlineUpdate = async (event) => {
+    event.preventDefault();
+    setAdminMessage("");
+    try {
+      const updated = await updateComplaintDeadline(adminId.trim(), {
+        adminId: currentUser.id,
+        deadline: adminDeadline || null
+      });
+      setAdminMessage(
+        adminDeadline
+          ? `Deadline for ${updated.complaintId} set to ${new Date(adminDeadline).toLocaleDateString()}.`
+          : `Deadline removed for ${updated.complaintId}.`
+      );
+      if (trackId.trim() === updated.complaintId) {
+        setTrackedComplaint(await getComplaintStatus(updated.complaintId));
+      }
+      await loadComplaints();
+    } catch (error) { setAdminMessage(error.message); }
   };
 
   const handleUseLocation = () => {
     setGeoError("");
-
     if (!navigator.geolocation) {
       setGeoError("Geolocation is not supported in this browser.");
       return;
     }
-
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        setGeoLocation({
-          lat: position.coords.latitude,
-          lng: position.coords.longitude
-        });
+        setGeoLocation({ lat: position.coords.latitude, lng: position.coords.longitude });
       },
       () => {
         setGeoError("Unable to read your location. Allow access in the browser or skip this step.");
@@ -555,989 +509,1029 @@ export default function App() {
   const handleAssignComplaint = async (event) => {
     event.preventDefault();
     setAssignMessage("");
-
     try {
       const updated = await assignComplaint(adminId.trim(), {
         adminId: currentUser.id,
-        assigneeUserId
+        assigneeUserId,
+        deadline: assignDeadline || null
       });
-      setAssignMessage(`Assigned ${updated.complaintId} to ${updated.assignedTo?.fullName || "assignee"}.`);
+      const deadlinePart = updated.deadline
+        ? ` with deadline ${new Date(updated.deadline).toLocaleDateString()}`
+        : "";
+      setAssignMessage(
+        `Assigned ${updated.complaintId} to ${updated.assignedTo?.fullName || "assignee"}${deadlinePart}.`
+      );
+      setAssignDeadline("");
       await loadComplaints();
-
       if (trackId.trim() === updated.complaintId) {
-        const tracked = await getComplaintStatus(updated.complaintId);
-        setTrackedComplaint(tracked);
+        setTrackedComplaint(await getComplaintStatus(updated.complaintId));
       }
-    } catch (error) {
-      setAssignMessage(error.message);
-    }
+    } catch (error) { setAssignMessage(error.message); }
   };
 
   const submitWorkerUpdate = async ({ markCompleted }) => {
     setWorkMessage("");
-
-    if (!workComplaintId.trim()) {
-      setWorkMessage("Select a complaint first.");
-      return;
-    }
-
+    if (!workComplaintId.trim()) { setWorkMessage("Select a complaint first."); return; }
     try {
       let photoUrl = "";
-
       if (workPhotoFile) {
+        if (workPhotoFile.size > MAX_PHOTO_BYTES) {
+          setWorkMessage("Photo is too large. Please upload an image under 5 MB.");
+          return;
+        }
         photoUrl = await fileToDataUrl(workPhotoFile);
       }
-
       const updated = await addProgressUpdate(workComplaintId.trim(), {
         workerId: currentUser.id,
-        text: workUpdateText,
-        photoUrl,
-        markCompleted
+        text: workUpdateText, photoUrl, markCompleted
       });
       setWorkMessage(markCompleted ? "Task marked complete and log saved." : "Progress update saved.");
-      setWorkUpdateText("");
-      setWorkPhotoFile(null);
-      await loadComplaints();
-      await loadWorkerDashboard();
-
+      setWorkUpdateText(""); setWorkPhotoFile(null);
+      await loadComplaints(); await loadWorkerDashboard();
       if (trackId.trim() === updated.complaintId) {
-        const tracked = await getComplaintStatus(updated.complaintId);
-        setTrackedComplaint(tracked);
+        setTrackedComplaint(await getComplaintStatus(updated.complaintId));
       }
-    } catch (error) {
-      setWorkMessage(error.message);
-    }
+    } catch (error) { setWorkMessage(error.message); }
   };
 
   const handleFilterSearch = async (event) => {
     event.preventDefault();
-    setFilterMessage("");
-
+    setFilterMessage(""); setFilterRan(true);
     try {
       const results = await filterComplaints({
-        status: filterStatus,
-        category: filterCategory,
-        priority: filterPriority,
-        area: filterArea,
-        dateFrom: filterDateFrom,
-        dateTo: filterDateTo,
-        keyword: filterKeyword
+        status: filterStatus, category: filterCategory,
+        priority: filterPriority, area: filterArea,
+        dateFrom: filterDateFrom, dateTo: filterDateTo,
+        keyword: filterKeyword, assignee: filterAssignee
       });
       setFilterResults(results);
-      setFilterMessage(`Found ${results.length} complaint(s).`);
-    } catch (error) {
-      setFilterMessage(error.message);
-      setFilterResults([]);
-    }
+      setFilterMessage(`Found ${results.length} complaint${results.length === 1 ? "" : "s"}.`);
+    } catch (error) { setFilterMessage(error.message); setFilterResults([]); }
   };
 
   const handleClearFilters = () => {
-    setFilterStatus("");
-    setFilterCategory("");
-    setFilterPriority("");
-    setFilterArea("");
-    setFilterDateFrom("");
-    setFilterDateTo("");
-    setFilterKeyword("");
-    setFilterResults([]);
-    setFilterMessage("");
+    setFilterStatus(""); setFilterCategory(""); setFilterPriority("");
+    setFilterArea(""); setFilterDateFrom(""); setFilterDateTo("");
+    setFilterKeyword(""); setFilterAssignee("");
+    setFilterResults([]); setFilterMessage(""); setFilterRan(false);
   };
 
   const handleMarkNotificationRead = async (notificationId) => {
-    try {
-      await markNotificationRead(notificationId);
-      await loadNotifications();
-    } catch {}
+    try { await markNotificationRead(notificationId); await loadNotifications(); }
+    catch {}
   };
 
   const handleMarkAllRead = async () => {
-    try {
-      await markAllNotificationsRead(currentUser.id);
-      await loadNotifications();
-    } catch {}
+    try { await markAllNotificationsRead(currentUser.id); await loadNotifications(); }
+    catch {}
   };
 
-  const handleLoadComments = async (complaintId) => {
-    setCommentComplaintId(complaintId);
-    setCommentMessage("");
-
-    try {
-      const comments = await getComments(complaintId);
-      setCommentList(comments);
-    } catch (error) {
-      setCommentMessage(error.message);
-      setCommentList([]);
-    }
+  const toggleExpandComments = (complaintId) => {
+    setExpandedCommentId((prev) => (prev === complaintId ? "" : complaintId));
   };
 
-  const handleAddComment = async (event) => {
-    event.preventDefault();
-    setCommentMessage("");
-
-    if (!commentText.trim()) {
-      setCommentMessage("Comment text is required.");
-      return;
-    }
-
-    try {
-      await addComment(commentComplaintId, {
-        userId: currentUser.id,
-        text: commentText.trim()
-      });
-      setCommentText("");
-      setCommentMessage("Comment added.");
-      const comments = await getComments(commentComplaintId);
-      setCommentList(comments);
-    } catch (error) {
-      setCommentMessage(error.message);
-    }
+  const handleTrackFromCard = async (complaintId) => {
+    setTrackId(complaintId); setTrackError("");
+    try { setTrackedComplaint(await getComplaintStatus(complaintId)); setActiveView("track"); }
+    catch (error) { setTrackError(error.message); }
   };
 
+  const renderCard = (complaint, extra = {}) => (
+    <ComplaintCard
+      key={complaint._id}
+      complaint={complaint}
+      currentUser={currentUser}
+      expandedCommentId={expandedCommentId}
+      onToggleDiscussion={toggleExpandComments}
+      onTrack={handleTrackFromCard}
+      {...extra}
+    />
+  );
+
+  const totalComplaints = complaints.length;
+  const archivedComplaints = complaints.filter((c) => c.isArchived).length;
+  const activeComplaintsCount = totalComplaints - archivedComplaints;
+
+  /* ==========================
+     AUTH PAGE
+     ========================== */
   if (!currentUser) {
     return (
-      <div className="container auth-container">
-        <section className="auth-hero">
-          <p className="eyebrow">ComplaintHub</p>
-          <h1>A platform where citizens can report city problems, raise their voices, and work together to make their community better.</h1>
-          <p className="hero-copy">
-            Log in first, then submit complaints, track status by complaint ID, browse complaint history and archive, and use the FAQ help center.
-          </p>
-        </section>
-
-        <section className="card auth-card">
-          <div className="auth-tabs">
-            <button type="button" className={authMode === "signup" ? "tab active" : "tab"} onClick={() => setAuthMode("signup")}>Sign Up</button>
-            <button type="button" className={authMode === "login" ? "tab active" : "tab"} onClick={() => setAuthMode("login")}>Login</button>
+      <div className="auth-shell">
+        <section className="auth-brand">
+          <div className="auth-brand-header">
+            <div className="brand-logo" aria-hidden="true">
+              <Icon name="check" size={20} strokeWidth={3} />
+            </div>
+            <div>
+              <div className="brand-name" style={{ color: "#fff", fontSize: "16px" }}>ComplaintHub</div>
+              <div className="brand-tag">Civic Platform</div>
+            </div>
           </div>
 
-          <form onSubmit={handleAuthSubmit}>
-            {authMode === "signup" ? (
-              <>
-                <label>Full Name</label>
-                <input value={fullName} onChange={(event) => setFullName(event.target.value)} required />
+          <div className="auth-brand-body">
+            <p className="auth-eyebrow">Civic voice, delivered</p>
+            <h1>Report city problems, track every step, and see them resolved.</h1>
+            <p>
+              ComplaintHub connects citizens, workers, and administrators on a single platform — with
+              real-time notifications, progress timelines, and category-wise reports.
+            </p>
 
-                <label>Email</label>
-                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
-
-                <label>Phone (optional)</label>
-                <input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+8801XXXXXXXXX" />
-
-                <label>Password</label>
-                <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
-              </>
-            ) : (
-              <>
-                <label>Email</label>
-                <input value={email} onChange={(event) => setEmail(event.target.value)} required />
-
-                <div className="auth-tabs login-method-tabs">
-                  <button
-                    type="button"
-                    className={loginMethod === "password" ? "tab active" : "tab"}
-                    onClick={() => {
-                      setLoginMethod("password");
-                      setAuthError("");
-                      setAuthMessage("");
-                      setOtpPreview("");
-                    }}
-                  >
-                    Sign in using Password
-                  </button>
-                  <button
-                    type="button"
-                    className={loginMethod === "otp" ? "tab active" : "tab"}
-                    onClick={() => {
-                      setLoginMethod("otp");
-                      setAuthError("");
-                      setAuthMessage("");
-                      setOtpPreview("");
-                    }}
-                  >
-                    Sign in using OTP (Optional)
-                  </button>
+            <div className="auth-features">
+              <div className="auth-feature">
+                <div className="auth-feature-icon"><Icon name="plus" size={18} /></div>
+                <div>
+                  <h4>Submit in seconds</h4>
+                  <p>Add a photo and map pin. Get a unique tracking ID instantly.</p>
                 </div>
+              </div>
+              <div className="auth-feature">
+                <div className="auth-feature-icon"><Icon name="bell" size={18} /></div>
+                <div>
+                  <h4>Real-time updates</h4>
+                  <p>Notifications the moment anything changes on your complaint.</p>
+                </div>
+              </div>
+              <div className="auth-feature">
+                <div className="auth-feature-icon"><Icon name="chat" size={18} /></div>
+                <div>
+                  <h4>Open discussion</h4>
+                  <p>Citizens, workers, and admins discuss complaints together.</p>
+                </div>
+              </div>
+              <div className="auth-feature">
+                <div className="auth-feature-icon"><Icon name="chart" size={18} /></div>
+                <div>
+                  <h4>Clear insights</h4>
+                  <p>Category reports and dashboards give every stakeholder clarity.</p>
+                </div>
+              </div>
+            </div>
+          </div>
 
-                {loginMethod === "password" ? (
-                  <>
-                    <label>Password</label>
-                    <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
-                  </>
-                ) : (
-                  <>
-                    <label>OTP Code</label>
-                    <input value={otpCode} onChange={(event) => setOtpCode(event.target.value)} placeholder="Enter OTP from your email" />
-                    <div className="otp-actions">
-                      <button type="button" onClick={handleRequestOtpLogin}>Send OTP to Email</button>
-                      <button type="button" onClick={handleVerifyOtpLogin}>Verify OTP & Login</button>
-                    </div>
-                    {otpPreview ? <div className="otp-box">Demo OTP: <strong>{otpPreview}</strong></div> : null}
-                  </>
-                )}
-              </>
-            )}
+          <div className="auth-footer-note">© {new Date().getFullYear()} ComplaintHub · Built for better cities</div>
+        </section>
 
-            {authMode === "signup" || loginMethod === "password" ? (
-              <button type="submit">{authMode === "signup" ? "Create Account" : "Login"}</button>
-            ) : null}
-          </form>
+        <section className="auth-form-wrap">
+          <div className="auth-card">
+            <h2>{authMode === "signup" ? "Create your account" : "Welcome back"}</h2>
+            <span className="small">
+              {authMode === "signup"
+                ? "Sign up in seconds \u2014 no credit card required."
+                : "Sign in to submit, track, and discuss complaints."}
+            </span>
 
-          {authError ? <div className="error">{authError}</div> : null}
-          {authMessage ? <div className="success">{authMessage}</div> : null}
+            <div className="auth-tabs">
+              <button type="button" className={authMode === "signup" ? "tab active" : "tab"} onClick={() => setAuthMode("signup")}>Sign Up</button>
+              <button type="button" className={authMode === "login" ? "tab active" : "tab"} onClick={() => setAuthMode("login")}>Login</button>
+            </div>
+
+            <form onSubmit={handleAuthSubmit}>
+              {authMode === "signup" ? (
+                <>
+                  <label>Full Name</label>
+                  <input value={fullName} onChange={(e) => setFullName(e.target.value)} required />
+                  <label>Email</label>
+                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+                  <label>Phone (optional)</label>
+                  <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+8801XXXXXXXXX" />
+                  <label>Password</label>
+                  <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+                </>
+              ) : (
+                <>
+                  <label>Email</label>
+                  <input value={email} onChange={(e) => setEmail(e.target.value)} required />
+
+                  <div className="auth-tabs login-method-tabs">
+                    <button
+                      type="button"
+                      className={loginMethod === "password" ? "tab active" : "tab"}
+                      onClick={() => { setLoginMethod("password"); setAuthError(""); setAuthMessage(""); setOtpPreview(""); }}
+                    >
+                      Password
+                    </button>
+                    <button
+                      type="button"
+                      className={loginMethod === "otp" ? "tab active" : "tab"}
+                      onClick={() => { setLoginMethod("otp"); setAuthError(""); setAuthMessage(""); setOtpPreview(""); }}
+                    >
+                      Email OTP
+                    </button>
+                  </div>
+
+                  {loginMethod === "password" ? (
+                    <>
+                      <label>Password</label>
+                      <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+                    </>
+                  ) : (
+                    <>
+                      <label>OTP Code</label>
+                      <input value={otpCode} onChange={(e) => setOtpCode(e.target.value)} placeholder="Enter the OTP from your email" />
+                      <div className="otp-actions">
+                        <button type="button" className="secondary-button" onClick={handleRequestOtpLogin}>Send OTP</button>
+                        <button type="button" onClick={handleVerifyOtpLogin}>Verify &amp; Login</button>
+                      </div>
+                      {otpPreview ? <div className="otp-box">Demo OTP: <strong>{otpPreview}</strong></div> : null}
+                    </>
+                  )}
+                </>
+              )}
+
+              {authMode === "signup" || loginMethod === "password" ? (
+                <button type="submit">{authMode === "signup" ? "Create Account" : "Login"}</button>
+              ) : null}
+            </form>
+
+            {authError ? <div className="error" style={{ marginTop: "8px" }}>{authError}</div> : null}
+            {authMessage ? <div className="success" style={{ marginTop: "8px" }}>{authMessage}</div> : null}
+          </div>
         </section>
       </div>
     );
   }
 
+  /* ==========================
+     AUTHENTICATED SHELL
+     ========================== */
+  const topbarTitles = {
+    overview: { title: "Overview", subtitle: isAdmin ? "Manage complaints and monitor platform activity." : isWorkerOrMp ? "Your assigned work at a glance." : "Your complaints and activity." },
+    submit: { title: "Submit Complaint", subtitle: "Describe the issue, add photo and location, and we'll take it from there." },
+    track: { title: "Track by Complaint ID", subtitle: "Enter an ID to see the status timeline, location, and discussion." },
+    history: { title: "History & Archive", subtitle: "Your past complaints with filters." },
+    complaints: { title: "Search & Filter Complaints", subtitle: "Combine filters to find complaints instantly." },
+    tasks: { title: "My Tasks", subtitle: "Assigned work with deadlines and priorities." },
+    progress: { title: "Post a Progress Update", subtitle: "Log progress, attach proof, and mark tasks complete." },
+    users: { title: "User Management", subtitle: "Assign roles across Citizen, Worker, MP, and Admin." },
+    controls: { title: "Complaint Controls", subtitle: "Update status, priority, deadlines, and assign work." },
+    reports: { title: "Category Reports", subtitle: "Breakdown of complaints by category and resolution rate." },
+    help: { title: "Help Center", subtitle: "Answers to common questions." }
+  };
+  const meta = topbarTitles[activeView] || topbarTitles.overview;
+
   return (
-    <div className="container">
-      <header className="hero app-hero">
-        <p className="eyebrow">ComplaintHub</p>
-        <h1>
-          {isAdmin ? "Admin Dashboard" : isWorkerOrMp ? "Worker / MP Dashboard" : "User Dashboard"}
-        </h1>
-        <p className="hero-copy">
-          {isAdmin
-            ? "Manage complaints, assign workers or MPs, set status and priority, and review map and history."
-            : isWorkerOrMp
-              ? "View assigned complaints, add progress updates with photos, mark tasks complete, and track status by ID."
-              : "Submit complaints with optional photo and map location, track them by ID, browse history, and use the help center."}
-        </p>
-        <div className="user-banner hero-user-banner">
-          <div>
-            Signed in as <strong>{currentUser.fullName}</strong> ({currentUser.role})
-          </div>
-          <div className="header-actions">
-            <div className="notification-wrapper">
-              <button
-                type="button"
-                className="secondary-button notification-bell"
-                onClick={() => setShowNotifications(!showNotifications)}
-              >
-                Notifications {unreadCount > 0 ? <span className="notif-badge">{unreadCount}</span> : null}
-              </button>
-              {showNotifications ? (
-                <div className="notification-dropdown">
-                  <div className="notif-header">
-                    <strong>Notifications</strong>
-                    {unreadCount > 0 ? (
-                      <button type="button" className="secondary-button" onClick={handleMarkAllRead}>
-                        Mark all read
-                      </button>
-                    ) : null}
+    <div className="app-shell">
+      <Sidebar
+        items={navItems}
+        activeView={activeView}
+        onSelect={setActiveView}
+        user={currentUser}
+        onLogout={handleLogout}
+        mobileOpen={mobileNavOpen}
+        onCloseMobile={() => setMobileNavOpen(false)}
+      />
+
+      <div className="app-main">
+        <Topbar
+          title={meta.title}
+          subtitle={meta.subtitle}
+          user={currentUser}
+          unreadCount={unreadCount}
+          showNotifications={showNotifications}
+          notifications={notifications}
+          onToggleNotifications={() => setShowNotifications((v) => !v)}
+          onCloseNotifications={() => setShowNotifications(false)}
+          onMarkNotificationRead={handleMarkNotificationRead}
+          onMarkAllRead={handleMarkAllRead}
+          onOpenMobileNav={() => setMobileNavOpen(true)}
+        />
+
+        <main className="app-content">
+          {/* ===== OVERVIEW ===== */}
+          {activeView === "overview" ? (
+            <>
+              <section className="page-hero">
+                <p className="eyebrow">Welcome back</p>
+                <h1>Hello, {currentUser.fullName.split(" ")[0]}</h1>
+                <p>
+                  {isAdmin
+                    ? "Keep complaints moving \u2014 assign workers, set deadlines, and track resolution rates."
+                    : isWorkerOrMp
+                      ? "Stay on top of your assigned tasks and post updates the moment something changes."
+                      : "Report city problems, track progress in real time, and join the discussion."}
+                </p>
+              </section>
+
+              <section className="card">
+                <div className="section-heading">
+                  <div>
+                    <h3>Your Snapshot</h3>
+                    <p className="small muted">A quick look at where things stand.</p>
                   </div>
-                  {notifications.length === 0 ? (
-                    <div className="small notif-empty">No notifications yet.</div>
+                  <span className={`pill pill-role pill-role-${roleKey(currentUser.role)}`}>{currentUser.role}</span>
+                </div>
+                <div className={isWorkerOrMp && workerDashData ? "dashboard-grid dashboard-grid-6" : "dashboard-grid"}>
+                  <div className="dashboard-stat">
+                    <span className="stat-label">{isCitizen ? "Your Complaints" : isWorkerOrMp ? "Total Assigned" : "Total Complaints"}</span>
+                    <strong>{isWorkerOrMp && workerDashData ? workerDashData.stats.totalAssigned : totalComplaints}</strong>
+                  </div>
+                  <div className="dashboard-stat">
+                    <span className="stat-label">Active</span>
+                    <strong>{isWorkerOrMp && workerDashData ? workerDashData.stats.totalPending : activeComplaintsCount}</strong>
+                  </div>
+                  {isWorkerOrMp && workerDashData ? (
+                    <>
+                      <div className={`dashboard-stat ${workerDashData.stats.overdueCount > 0 ? "dashboard-stat-alert" : ""}`}>
+                        <span className="stat-label">Overdue</span>
+                        <strong>{workerDashData.stats.overdueCount}</strong>
+                      </div>
+                      <div className={`dashboard-stat ${workerDashData.stats.dueSoonCount > 0 ? "dashboard-stat-warn" : ""}`}>
+                        <span className="stat-label">Due soon</span>
+                        <strong>{workerDashData.stats.dueSoonCount}</strong>
+                      </div>
+                      <div className="dashboard-stat">
+                        <span className="stat-label">Completed</span>
+                        <strong>{workerDashData.stats.totalCompleted}</strong>
+                      </div>
+                      <div className="dashboard-stat">
+                        <span className="stat-label">Resolved</span>
+                        <strong>{workerDashData.stats.totalResolved}</strong>
+                      </div>
+                    </>
                   ) : (
-                    <ul className="notif-list">
-                      {notifications.map((notif) => (
-                        <li
-                          key={notif._id}
-                          className={notif.isRead ? "notif-item read" : "notif-item unread"}
-                          onClick={() => !notif.isRead && handleMarkNotificationRead(notif._id)}
-                        >
-                          <div className="notif-message">{notif.message}</div>
-                          <div className="small">{formatDate(notif.createdAt)}</div>
-                        </li>
-                      ))}
-                    </ul>
+                    <>
+                      <div className="dashboard-stat">
+                        <span className="stat-label">Archived</span>
+                        <strong>{archivedComplaints}</strong>
+                      </div>
+                      <div className="dashboard-stat">
+                        <span className="stat-label">Unread alerts</span>
+                        <strong>{unreadCount}</strong>
+                      </div>
+                    </>
                   )}
                 </div>
+              </section>
+
+              {isAdmin ? (
+                <section className="card">
+                  <div className="section-heading">
+                    <div>
+                      <h3>Recent activity</h3>
+                      <p className="small muted">Latest complaints across the platform.</p>
+                    </div>
+                    <button type="button" className="secondary-button" onClick={() => setActiveView("complaints")}>
+                      View all
+                    </button>
+                  </div>
+                  {complaints.slice(0, 3).map((complaint) => renderCard(complaint, { showDiscussion: false }))}
+                  {complaints.length === 0 ? (
+                    <div className="empty-state">
+                      <div className="empty-state-icon"><Icon name="inbox" size={22} /></div>
+                      <div className="empty-state-title">Nothing here yet</div>
+                      <div className="small muted">When citizens submit complaints, they'll appear here.</div>
+                    </div>
+                  ) : null}
+                </section>
               ) : null}
-            </div>
-            <button type="button" className="secondary-button" onClick={handleLogout}>Log out</button>
-          </div>
-        </div>
-      </header>
 
-      <section className="card">
-        <h3>User Dashboard</h3>
-        <div className="dashboard-grid">
-          <div className="dashboard-stat">
-            <span className="stat-label">Role</span>
-            <strong>{currentUser.role}</strong>
-          </div>
-          <div className="dashboard-stat">
-            <span className="stat-label">Total Complaints</span>
-            <strong>{totalComplaints}</strong>
-          </div>
-          <div className="dashboard-stat">
-            <span className="stat-label">Active</span>
-            <strong>{activeComplaints}</strong>
-          </div>
-          <div className="dashboard-stat">
-            <span className="stat-label">Archived</span>
-            <strong>{archivedComplaints}</strong>
-          </div>
-        </div>
-      </section>
+              {isWorkerOrMp && workerDashData ? (
+                <section className="card">
+                  <div className="section-heading">
+                    <div>
+                      <h3>Active tasks</h3>
+                      <p className="small muted">Tasks currently assigned to you.</p>
+                    </div>
+                    <button type="button" className="secondary-button" onClick={() => setActiveView("tasks")}>
+                      View all
+                    </button>
+                  </div>
+                  {workerDashData.activeComplaints.slice(0, 3).map((c) => renderCard(c))}
+                  {workerDashData.activeComplaints.length === 0 ? (
+                    <div className="empty-state">
+                      <div className="empty-state-icon"><Icon name="check" size={22} /></div>
+                      <div className="empty-state-title">All caught up</div>
+                      <div className="small muted">No active tasks right now — great work.</div>
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
 
-      <section className="card">
-        <div className="section-heading">
-          <h3>Search & Filter Complaints</h3>
-          <button type="button" className="secondary-button" onClick={() => setShowFilterPanel(!showFilterPanel)}>
-            {showFilterPanel ? "Hide Filters" : "Show Filters"}
-          </button>
-        </div>
+              {isCitizen ? (
+                <section className="card">
+                  <div className="section-heading">
+                    <div>
+                      <h3>Quick actions</h3>
+                      <p className="small muted">Jump straight into the most common flows.</p>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" onClick={() => setActiveView("submit")}>
+                      <Icon name="plus" size={16} /> Submit new complaint
+                    </button>
+                    <button type="button" className="secondary-button" onClick={() => setActiveView("track")}>
+                      <Icon name="map" size={16} /> Track by ID
+                    </button>
+                    <button type="button" className="secondary-button" onClick={() => setActiveView("history")}>
+                      <Icon name="history" size={16} /> View history
+                    </button>
+                  </div>
+                </section>
+              ) : null}
+            </>
+          ) : null}
 
-        {showFilterPanel ? (
-          <form onSubmit={handleFilterSearch} className="filter-form">
-            <div className="filter-grid">
-              <div>
-                <label>Status</label>
-                <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
-                  <option value="">All</option>
-                  {STATUS_VALUES.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-              <div>
+          {/* ===== SUBMIT (citizen) ===== */}
+          {activeView === "submit" && isCitizen ? (
+            <section className="card">
+              <h3>Submit a complaint</h3>
+              <p className="small muted">Add a clear photo and your location so the issue appears on the map.</p>
+              <form onSubmit={handleCreate}>
+                <label>Title</label>
+                <input value={title} onChange={(e) => setTitle(e.target.value)} required maxLength={140} placeholder="Short summary of the issue" />
+
+                <label>Description</label>
+                <textarea rows={4} value={description} maxLength={MAX_DESCRIPTION} onChange={(e) => setDescription(e.target.value)} required placeholder="Describe when and where the issue occurs, and why it matters…" />
+                <div className="small muted char-counter">{description.length}/{MAX_DESCRIPTION}</div>
+
                 <label>Category</label>
-                <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
-                  <option value="">All</option>
+                <select value={complaintCategory} onChange={(e) => setComplaintCategory(e.target.value)}>
                   {CATEGORY_VALUES.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
-              </div>
-              <div>
-                <label>Priority</label>
-                <select value={filterPriority} onChange={(e) => setFilterPriority(e.target.value)}>
-                  <option value="">All</option>
-                  {PRIORITY_VALUES.map((p) => <option key={p} value={p}>{p}</option>)}
-                </select>
-              </div>
-              <div>
-                <label>Area / Location</label>
-                <input value={filterArea} onChange={(e) => setFilterArea(e.target.value)} placeholder="e.g., Dhaka" />
-              </div>
-              <div>
-                <label>Date from</label>
-                <input type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)} />
-              </div>
-              <div>
-                <label>Date to</label>
-                <input type="date" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)} />
-              </div>
-            </div>
 
-            <label>Keyword</label>
-            <input value={filterKeyword} onChange={(e) => setFilterKeyword(e.target.value)} placeholder="Search by title or description..." />
+                <label>Photo (optional, max 5 MB)</label>
+                <input type="file" accept="image/*" onChange={handlePhotoChange} />
+                {photoError ? <div className="error">{photoError}</div> : null}
+                {submissionPhotoPreview ? (
+                  <div className="photo-preview">
+                    <img src={submissionPhotoPreview} alt="Photo preview" />
+                    <button type="button" className="secondary-button photo-remove" onClick={() => {
+                      setSubmissionPhotoFile(null); setSubmissionPhotoPreview("");
+                    }}>Remove photo</button>
+                  </div>
+                ) : null}
 
-            <div className="filter-actions">
-              <button type="submit">Search</button>
-              <button type="button" className="secondary-button" onClick={handleClearFilters}>Clear</button>
-            </div>
-          </form>
-        ) : null}
+                <label>Location address (optional)</label>
+                <input value={locationAddress} onChange={(e) => setLocationAddress(e.target.value)} placeholder="e.g., 1 Kuratoli, Dhaka 1229" />
 
-        {filterMessage ? <div className="small">{filterMessage}</div> : null}
-
-        {filterResults.length > 0 ? (
-          <div className="filter-results">
-            {filterResults.map((complaint) => (
-              <article key={complaint._id} className="history-item">
-                <div className="history-topline">
-                  <strong>{complaint.complaintId}</strong>
-                  <span className={complaint.isArchived ? "archive-pill archived" : "archive-pill active-archive"}>
-                    {complaint.isArchived ? "Archived" : "Active"}
-                  </span>
+                <div className="location-row">
+                  <button type="button" className="secondary-button" onClick={handleUseLocation}>
+                    <Icon name="map" size={14} /> Use my current location
+                  </button>
+                  {geoLocation ? (
+                    <span className="small geo-hint">
+                      GPS saved: {geoLocation.lat.toFixed(5)}, {geoLocation.lng.toFixed(5)}
+                    </span>
+                  ) : (
+                    <span className="small geo-hint muted">GPS is optional if your typed address is found.</span>
+                  )}
                 </div>
-                <div>{complaint.title}</div>
-                <div className="small">Category: {complaint.category || "Other"}</div>
-                <div className="small">Status: {complaint.status} | Priority: {complaint.priority}</div>
-                <div className="small">Created: {formatDate(complaint.createdAt)}</div>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  style={{ marginTop: "8px", width: "auto" }}
-                  onClick={() => handleLoadComments(complaint.complaintId)}
-                >
-                  Discussion
+                {geoError ? <div className="error">{geoError}</div> : null}
+
+                <button type="submit" disabled={creating}>
+                  {creating ? "Submitting\u2026" : "Create Complaint"}
                 </button>
-              </article>
-            ))}
-          </div>
-        ) : null}
-      </section>
+              </form>
 
-      {currentUser.role === "Citizen" ? (
-        <section className="card">
-          <h3>Submit Complaint</h3>
-          <p className="small">Add an optional photo and your location so the issue appears on the map.</p>
-          <form onSubmit={handleCreate}>
-            <label>Title</label>
-            <input value={title} onChange={(event) => setTitle(event.target.value)} required />
-
-            <label>Description</label>
-            <textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} required />
-
-            <label>Category</label>
-            <select value={complaintCategory} onChange={(event) => setComplaintCategory(event.target.value)}>
-              {CATEGORY_VALUES.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-
-            <label>Photo (optional)</label>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                setSubmissionPhotoFile(file || null);
-              }}
-            />
-
-            <label>Location address (optional)</label>
-            <input
-              value={locationAddress}
-              onChange={(event) => setLocationAddress(event.target.value)}
-              placeholder="e.g., 1 Kuratoli, Dhaka 1229"
-            />
-            <p className="small geo-hint muted">
-              Type a full address or area: the server looks it up on OpenStreetMap and saves map coordinates. You can
-              also use the GPS button below instead of typing, or use both (GPS + address label).
-            </p>
-
-            <div className="location-row">
-              <button type="button" className="secondary-button" onClick={handleUseLocation}>
-                Use my current location
-              </button>
-              {geoLocation ? (
-                <span className="small geo-hint">
-                  GPS saved: {geoLocation.lat.toFixed(5)}, {geoLocation.lng.toFixed(5)}
-                </span>
-              ) : (
-                <span className="small geo-hint muted">GPS is optional if your typed address is found.</span>
-              )}
-            </div>
-            {geoError ? <div className="error">{geoError}</div> : null}
-
-            <button type="submit">Create Complaint</button>
-          </form>
-
-          {suggestions.length > 0 ? (
-            <div className="suggestions">
-              <h4>Similar complaints found</h4>
-              <p>Check these records before creating a duplicate complaint.</p>
-              <ul>
-                {suggestions.map((complaint) => (
-                  <li key={complaint._id} className="suggestion-item">
-                    <strong>{complaint.complaintId}</strong>: {complaint.title}
-                    <br />
-                    <small>Status: {complaint.status} | Priority: {complaint.priority}</small>
-                    <br />
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        setTrackId(complaint.complaintId);
-                        setTrackError("");
-
-                        try {
-                          const full = await getComplaintStatus(complaint.complaintId);
-                          setTrackedComplaint(full);
-                        } catch (error) {
-                          setTrackError(error.message);
-                          setTrackedComplaint(null);
-                        }
-                      }}
-                    >
-                      View Details
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-
-          {submitError ? <div className="error">{submitError}</div> : null}
-          {newComplaint ? <div className="success">Complaint created with ID: <strong>{newComplaint.complaintId}</strong></div> : null}
-        </section>
-      ) : null}
-
-      <section className="card">
-        <h3>Track Status by Complaint ID</h3>
-        <form onSubmit={handleTrack} className="inline">
-          <input
-            placeholder="Enter complaint ID (e.g., CMP-20260310-ABC123)"
-            value={trackId}
-            onChange={(event) => setTrackId(event.target.value)}
-            required
-          />
-          <button type="submit">Track</button>
-        </form>
-
-        {trackError ? <div className="error">{trackError}</div> : null}
-        {trackedComplaint ? (
-          <div className="tracked-card">
-            <div className="small">Title: {trackedComplaint.title}</div>
-            <div className="small">Description: {trackedComplaint.description || "N/A"}</div>
-            <div className="small">Category: <span className="status-pill">{trackedComplaint.category || "Other"}</span></div>
-            <div className="small">Status: <span className="status-pill">{trackedComplaint.status}</span></div>
-            <div className="small">Priority: <span className="status-pill">{trackedComplaint.priority}</span></div>
-            <div className="small">
-              Assigned to:{" "}
-              {trackedComplaint.assignedTo?.fullName
-                ? `${trackedComplaint.assignedTo.fullName} (${trackedComplaint.assignedTo.role})`
-                : "Not assigned yet"}
-            </div>
-            <div className="small">
-              Worker completion: {trackedComplaint.workerTaskCompleted ? "Reported complete" : "Not marked complete"}
-            </div>
-            <div className="small">Archive State: {trackedComplaint.isArchived ? "Archived" : "Active"}</div>
-            <div className="small">Last Updated: {formatDate(trackedComplaint.updatedAt)}</div>
-            {trackedComplaint.submissionPhoto ? (
-              <div className="tracked-media">
-                <div className="small">Submitted photo</div>
-                <img src={trackedComplaint.submissionPhoto} alt="Complaint submission" className="complaint-photo" />
-              </div>
-            ) : null}
-            {trackedComplaint.location?.lat != null && trackedComplaint.location?.lng != null ? (
-              <div className="tracked-media">
-                <div className="small">Location on map</div>
-                <ComplaintsMap
-                  complaints={[
-                    {
-                      complaintId: trackedComplaint.complaintId,
-                      title: trackedComplaint.title,
-                      status: trackedComplaint.status,
-                      priority: trackedComplaint.priority,
-                      location: trackedComplaint.location
-                    }
-                  ]}
-                />
-              </div>
-            ) : null}
-            {Array.isArray(trackedComplaint.progressLogs) && trackedComplaint.progressLogs.length > 0 ? (
-              <div className="progress-logs">
-                <div className="small"><strong>Progress log</strong></div>
-                <ul>
-                  {[...trackedComplaint.progressLogs]
-                    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-                    .map((log) => (
-                      <li key={log._id || `${log.createdAt}-${log.text}`} className="progress-log-item">
-                        <div className="small">
-                          {formatDate(log.createdAt)} · {log.authorName} ·{" "}
-                          <span className="status-pill">{log.entryType}</span>
+              {suggestions.length > 0 ? (
+                <div className="suggestions">
+                  <h4><Icon name="sparkle" size={16} /> Similar complaints found</h4>
+                  <p>Check these records before creating a duplicate.</p>
+                  <ul>
+                    {suggestions.map((c) => (
+                      <li key={c._id} className="suggestion-item">
+                        <strong>{c.complaintId}</strong>: {c.title}
+                        <div className="suggestion-meta">
+                          <span className={statusClass(c.status)}>{c.status}</span>
+                          <span className={priorityClass(c.priority)}>{c.priority}</span>
                         </div>
-                        <div>{log.text}</div>
-                        {log.photoUrl ? (
-                          <img src={log.photoUrl} alt="Progress attachment" className="complaint-photo thumb" />
-                        ) : null}
+                        <button type="button" className="secondary-button" onClick={async () => {
+                          setTrackId(c.complaintId); setTrackError("");
+                          try { setTrackedComplaint(await getComplaintStatus(c.complaintId)); setActiveView("track"); }
+                          catch (error) { setTrackError(error.message); setTrackedComplaint(null); }
+                        }}>View details</button>
                       </li>
                     ))}
-                </ul>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </section>
-
-      {isAdmin ? (
-        <>
-          <section className="card">
-            <h3>Admin: User Management</h3>
-            <p className="small">Assign roles as Citizen, Worker, MP, or Admin for any registered user.</p>
-            {userAdminMessage ? <div className="small">{userAdminMessage}</div> : null}
-            {users.length === 0 ? <div className="small">No users available.</div> : null}
-            <div className="user-list">
-              {users.map((user) => (
-                <article key={user.id} className="user-item">
-                  <div>
-                    <strong>{user.fullName}</strong>
-                    <div className="small">{user.email || user.phone || "No contact info"}</div>
-                    <div className="small">Current Role: {user.role}</div>
-                  </div>
-                  <div className="user-actions">
-                    <select
-                      value={roleSelections[user.id] || user.role}
-                      onChange={(event) => {
-                        setRoleSelections((previous) => ({
-                          ...previous,
-                          [user.id]: event.target.value
-                        }));
-                      }}
-                    >
-                      {ROLE_ASSIGN_OPTIONS.map((roleOption) => (
-                        <option key={roleOption} value={roleOption}>{roleOption}</option>
-                      ))}
-                    </select>
-                    <button type="button" onClick={() => handleRoleUpdate(user.id)}>Save Role</button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
-
-          <section className="card">
-            <h3>Admin: Update Status</h3>
-            <form onSubmit={handleAdminUpdate}>
-              <label>Complaint ID</label>
-              <input value={adminId} onChange={(event) => setAdminId(event.target.value)} required />
-
-              <label>New Status</label>
-              <select value={adminStatus} onChange={(event) => setAdminStatus(event.target.value)}>
-                {STATUS_VALUES.map((status) => (
-                  <option key={status} value={status}>{status}</option>
-                ))}
-              </select>
-
-              <button type="submit">Update Status</button>
-            </form>
-            {adminMessage ? <div className="small">{adminMessage}</div> : null}
-          </section>
-
-          <section className="card">
-            <h3>Admin: Set Priority Level</h3>
-            <form onSubmit={handlePriorityUpdate}>
-              <label>Complaint ID</label>
-              <input value={adminId} onChange={(event) => setAdminId(event.target.value)} required />
-
-              <label>Priority Level</label>
-              <select value={adminPriority} onChange={(event) => setAdminPriority(event.target.value)}>
-                {PRIORITY_VALUES.map((priority) => (
-                  <option key={priority} value={priority}>{priority}</option>
-                ))}
-              </select>
-
-              <button type="submit">Update Priority</button>
-            </form>
-          </section>
-
-          <section className="card">
-            <h3>Admin: Assign to Worker or MP</h3>
-            <p className="small">Route a complaint to a worker or MP. Status is set to Assigned automatically.</p>
-            <form onSubmit={handleAssignComplaint}>
-              <label>Complaint ID</label>
-              <input value={adminId} onChange={(event) => setAdminId(event.target.value)} required />
-
-              <label>Assignee</label>
-              <select
-                value={assigneeUserId}
-                onChange={(event) => setAssigneeUserId(event.target.value)}
-                required
-              >
-                <option value="" disabled>
-                  Select worker or MP
-                </option>
-                {users
-                  .filter((user) => ["Worker", "MP"].includes(user.role))
-                  .map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.fullName} ({user.role})
-                    </option>
-                  ))}
-              </select>
-
-              <button type="submit" disabled={!assigneeUserId}>
-                Assign complaint
-              </button>
-            </form>
-            {assignMessage ? <div className="small">{assignMessage}</div> : null}
-            {users.filter((user) => ["Worker", "MP"].includes(user.role)).length === 0 ? (
-              <div className="small">No Worker or MP users yet. Promote accounts under User Management first.</div>
-            ) : null}
-          </section>
-        </>
-      ) : null}
-
-      {isWorkerOrMp ? (
-        <section className="card">
-          <h3>Worker / MP: Progress updates</h3>
-          <p className="small">
-            Add text and optional photo proof for your assigned complaint, or mark the task complete when finished.
-          </p>
-
-          {complaints.length === 0 ? (
-            <div className="small">No complaints are assigned to you yet.</div>
-          ) : (
-            <>
-              <label>Assigned complaint</label>
-              <select value={workComplaintId} onChange={(event) => setWorkComplaintId(event.target.value)}>
-                {complaints.map((complaint) => (
-                  <option key={complaint._id} value={complaint.complaintId}>
-                    {complaint.complaintId} — {complaint.title}
-                  </option>
-                ))}
-              </select>
-
-              <label>Update details</label>
-              <textarea
-                rows={4}
-                value={workUpdateText}
-                onChange={(event) => setWorkUpdateText(event.target.value)}
-                placeholder="Describe what you did on site..."
-              />
-
-              <label>Photo proof (optional)</label>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  setWorkPhotoFile(file || null);
-                }}
-              />
-
-              <div className="worker-actions">
-                <button type="button" onClick={() => submitWorkerUpdate({ markCompleted: false })}>
-                  Submit update
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => submitWorkerUpdate({ markCompleted: true })}
-                >
-                  Task completed
-                </button>
-              </div>
-            </>
-          )}
-
-          {workMessage ? <div className="small">{workMessage}</div> : null}
-        </section>
-      ) : null}
-
-      {isWorkerOrMp && workerDashData ? (
-        <section className="card">
-          <h3>Worker Dashboard</h3>
-          <div className="dashboard-grid">
-            <div className="dashboard-stat">
-              <span className="stat-label">Total Assigned</span>
-              <strong>{workerDashData.stats.totalAssigned}</strong>
-            </div>
-            <div className="dashboard-stat">
-              <span className="stat-label">Active Tasks</span>
-              <strong>{workerDashData.stats.totalPending}</strong>
-            </div>
-            <div className="dashboard-stat">
-              <span className="stat-label">Completed</span>
-              <strong>{workerDashData.stats.totalCompleted}</strong>
-            </div>
-            <div className="dashboard-stat">
-              <span className="stat-label">Resolved</span>
-              <strong>{workerDashData.stats.totalResolved}</strong>
-            </div>
-          </div>
-
-          {workerDashData.activeComplaints.length > 0 ? (
-            <>
-              <h4 style={{ marginTop: "16px" }}>Active Tasks</h4>
-              {workerDashData.activeComplaints.map((c) => (
-                <article key={c._id} className="history-item">
-                  <div className="history-topline">
-                    <strong>{c.complaintId}</strong>
-                    <span className="status-pill">{c.status}</span>
-                  </div>
-                  <div>{c.title}</div>
-                  <div className="small">Category: {c.category || "Other"} | Priority: {c.priority}</div>
-                  <div className="small">Submitted by: {c.citizenId?.fullName || c.submittedBy}</div>
-                  <div className="small">Created: {formatDate(c.createdAt)}</div>
-                </article>
-              ))}
-            </>
-          ) : (
-            <div className="small" style={{ marginTop: "12px" }}>No active tasks right now.</div>
-          )}
-
-          {workerDashData.completedComplaints.length > 0 ? (
-            <>
-              <h4 style={{ marginTop: "16px" }}>Recently Completed</h4>
-              {workerDashData.completedComplaints.slice(0, 5).map((c) => (
-                <article key={c._id} className="history-item">
-                  <div className="history-topline">
-                    <strong>{c.complaintId}</strong>
-                    <span className="archive-pill archived">Completed</span>
-                  </div>
-                  <div>{c.title}</div>
-                  <div className="small">Completed: {formatDate(c.updatedAt)}</div>
-                </article>
-              ))}
-            </>
-          ) : null}
-        </section>
-      ) : null}
-
-      <section className="card">
-        <h3>Comment / Discussion</h3>
-        <p className="small">Enter a complaint ID to view and add comments to the discussion thread.</p>
-        <div className="inline">
-          <input
-            placeholder="Enter complaint ID"
-            value={commentComplaintId}
-            onChange={(e) => setCommentComplaintId(e.target.value)}
-          />
-          <button type="button" onClick={() => handleLoadComments(commentComplaintId)}>Load</button>
-        </div>
-
-        {commentComplaintId && commentList.length > 0 ? (
-          <div className="comment-thread">
-            {commentList.map((comment) => (
-              <div key={comment._id} className="comment-item">
-                <div className="comment-author">
-                  <strong>{comment.authorName}</strong>
-                  <span className="status-pill">{comment.authorRole}</span>
-                  <span className="small">{formatDate(comment.createdAt)}</span>
-                </div>
-                <div className="comment-text">{comment.text}</div>
-              </div>
-            ))}
-          </div>
-        ) : commentComplaintId ? (
-          <div className="small" style={{ marginTop: "8px" }}>No comments yet for this complaint.</div>
-        ) : null}
-
-        {commentComplaintId ? (
-          <form onSubmit={handleAddComment} style={{ marginTop: "12px" }}>
-            <textarea
-              rows={3}
-              value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              placeholder="Write your comment..."
-              maxLength={1000}
-            />
-            <button type="submit">Post Comment</button>
-          </form>
-        ) : null}
-
-        {commentMessage ? <div className="small">{commentMessage}</div> : null}
-      </section>
-
-      {isAdmin ? (
-        <section className="card">
-          <h3>Category-wise Reports</h3>
-          <p className="small">Breakdown of complaints by category with resolution statistics.</p>
-          <button type="button" className="secondary-button" style={{ width: "auto", marginBottom: "12px" }} onClick={() => loadCategoryReports()}>
-            Refresh Reports
-          </button>
-
-          {categoryReports.length > 0 ? (
-            <div className="category-reports-table-wrap">
-              <table className="category-reports-table">
-                <thead>
-                  <tr>
-                    <th>Category</th>
-                    <th>Total</th>
-                    <th>Pending</th>
-                    <th>Assigned</th>
-                    <th>In Progress</th>
-                    <th>Resolved</th>
-                    <th>Rejected</th>
-                    <th>Resolution %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {categoryReports.map((report) => (
-                    <tr key={report.category}>
-                      <td>{report.category}</td>
-                      <td><strong>{report.total}</strong></td>
-                      <td>{report.pending}</td>
-                      <td>{report.assigned}</td>
-                      <td>{report.inProgress}</td>
-                      <td>{report.resolved}</td>
-                      <td>{report.rejected}</td>
-                      <td>
-                        <div className="resolution-bar-wrap">
-                          <div className="resolution-bar" style={{ width: `${report.resolutionRate}%` }} />
-                          <span>{report.resolutionRate}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="small">No data available yet.</div>
-          )}
-        </section>
-      ) : null}
-
-      <section className="card history-archive-card">
-        <div className="section-heading">
-          <div>
-            <h3>Complaint History and Archive</h3>
-            <p className="small">
-              {currentUser.role === "Admin" || currentUser.role === "Super Admin"
-                ? "Admins can see all complaints and switch between active and archived records. Each row can include its own map when coordinates were saved."
-                : isWorkerOrMp
-                  ? "You see complaints assigned to you. Each entry may show a location map if the citizen provided one."
-                  : "Citizens can see their complaint history, including archived items. A small map appears on each complaint that has a saved location."}
-            </p>
-          </div>
-          <div className="filter-row">
-            <button type="button" className={historyFilter === "all" ? "tab active" : "tab"} onClick={() => setHistoryFilter("all")}>All</button>
-            <button type="button" className={historyFilter === "active" ? "tab active" : "tab"} onClick={() => setHistoryFilter("active")}>Active</button>
-            <button type="button" className={historyFilter === "archived" ? "tab active" : "tab"} onClick={() => setHistoryFilter("archived")}>Archived</button>
-          </div>
-        </div>
-
-        {complaints.length === 0 ? <div className="small">No complaints found for this view.</div> : null}
-        {complaints.map((complaint) => {
-          const hasMapLocation =
-            complaint.location &&
-            typeof complaint.location.lat === "number" &&
-            typeof complaint.location.lng === "number";
-
-          return (
-            <article key={complaint._id} className="history-item">
-              <div className="history-topline">
-                <strong>{complaint.complaintId}</strong>
-                <span className={complaint.isArchived ? "archive-pill archived" : "archive-pill active-archive"}>
-                  {complaint.isArchived ? "Archived" : "Active"}
-                </span>
-              </div>
-              <div>{complaint.title}</div>
-              <div className="small">{complaint.description}</div>
-              <div className="small">Category: {complaint.category || "Other"} | Status: {complaint.status} | Priority: {complaint.priority}</div>
-              <div className="small">Submitted by: {complaint.citizenId?.fullName || complaint.submittedBy}</div>
-              {complaint.assignedTo ? (
-                <div className="small">
-                  Assigned to: {complaint.assignedTo.fullName} ({complaint.assignedTo.role})
+                  </ul>
                 </div>
               ) : null}
-              <div className="small">Created: {formatDate(complaint.createdAt)}</div>
 
-              {hasMapLocation ? (
-                <div className="history-item-map">
-                  <div className="small history-item-map-label">Location</div>
-                  <ComplaintsMap complaints={[complaint]} variant="mini" />
+              {submitError ? <div className="error" style={{ marginTop: "10px" }}>{submitError}</div> : null}
+              {newComplaint ? (
+                <div className="success" style={{ marginTop: "10px" }}>
+                  Complaint created with ID: <strong className="mono">{newComplaint.complaintId}</strong>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
+          {/* ===== TRACK ===== */}
+          {activeView === "track" ? (
+            <section className="card">
+              <h3>Track by complaint ID</h3>
+              <p className="small muted">Enter an ID to see its status timeline, location, and discussion.</p>
+              <form onSubmit={handleTrack} className="inline">
+                <input placeholder="CMP-YYYYMMDD-XXXXXX" value={trackId} onChange={(e) => setTrackId(e.target.value)} required />
+                <button type="submit">Track</button>
+              </form>
+
+              {trackError ? <div className="error" style={{ marginTop: "8px" }}>{trackError}</div> : null}
+
+              {trackedComplaint ? (
+                <div className="tracked-card">
+                  <div className="tracked-header">
+                    <div>
+                      <div className="mono small muted">{trackedComplaint.complaintId}</div>
+                      <div className="history-title">{trackedComplaint.title}</div>
+                    </div>
+                    <div className="history-top-pills">
+                      <span className={statusClass(trackedComplaint.status)}>{trackedComplaint.status}</span>
+                      <span className={priorityClass(trackedComplaint.priority)}>{trackedComplaint.priority}</span>
+                      {deadlineBadge(trackedComplaint.deadline) ? (
+                        <span className={deadlineBadge(trackedComplaint.deadline).className}>
+                          {deadlineBadge(trackedComplaint.deadline).label}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <StatusTimeline status={trackedComplaint.status} />
+
+                  <div className="small">{trackedComplaint.description || "No description provided."}</div>
+                  <div className="small muted">Category: {trackedComplaint.category || "Other"}</div>
+                  <div className="small muted">
+                    Assigned to:{" "}
+                    {trackedComplaint.assignedTo?.fullName
+                      ? `${trackedComplaint.assignedTo.fullName} (${trackedComplaint.assignedTo.role})`
+                      : "Not assigned yet"}
+                  </div>
+                  <div className="small muted">Last updated: {formatDate(trackedComplaint.updatedAt)}</div>
+
+                  {trackedComplaint.submissionPhoto ? (
+                    <div className="tracked-media">
+                      <div className="small">Submitted photo</div>
+                      <img src={trackedComplaint.submissionPhoto} alt="Complaint submission" className="complaint-photo" />
+                    </div>
+                  ) : null}
+
+                  {trackedComplaint.location?.lat != null && trackedComplaint.location?.lng != null ? (
+                    <div className="tracked-media">
+                      <div className="small">Location on map</div>
+                      <ComplaintsMap complaints={[{
+                        complaintId: trackedComplaint.complaintId,
+                        title: trackedComplaint.title,
+                        status: trackedComplaint.status,
+                        priority: trackedComplaint.priority,
+                        location: trackedComplaint.location
+                      }]} />
+                    </div>
+                  ) : null}
+
+                  {Array.isArray(trackedComplaint.progressLogs) && trackedComplaint.progressLogs.length > 0 ? (
+                    <div className="progress-logs">
+                      <div className="small"><strong>Progress log</strong></div>
+                      <ul>
+                        {[...trackedComplaint.progressLogs]
+                          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                          .map((log) => (
+                            <li key={log._id || `${log.createdAt}-${log.text}`} className="progress-log-item">
+                              <div className="small">
+                                {formatDate(log.createdAt)} · {log.authorName} ·{" "}
+                                <span className={`pill pill-status pill-status-${log.entryType === "completed" ? "resolved" : "progress"}`}>
+                                  {log.entryType}
+                                </span>
+                              </div>
+                              <div>{log.text}</div>
+                              {log.photoUrl ? <img src={log.photoUrl} alt="Progress attachment" className="complaint-photo thumb" /> : null}
+                            </li>
+                          ))}
+                      </ul>
+                    </div>
+                  ) : null}
+
+                  <div className="tracked-discussion">
+                    <InlineComments complaintId={trackedComplaint.complaintId} currentUser={currentUser} />
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
+          {/* ===== HISTORY (citizen/worker) ===== */}
+          {activeView === "history" && isCitizen ? (
+            <section className="card history-archive-card">
+              <div className="section-heading">
+                <div>
+                  <h3>Complaint history &amp; archive</h3>
+                  <p className="small muted">Every complaint you've submitted, with filters.</p>
+                </div>
+                <div className="filter-row">
+                  <button type="button" className={historyFilter === "all" ? "tab active" : "tab"} onClick={() => setHistoryFilter("all")}>All</button>
+                  <button type="button" className={historyFilter === "active" ? "tab active" : "tab"} onClick={() => setHistoryFilter("active")}>Active</button>
+                  <button type="button" className={historyFilter === "archived" ? "tab active" : "tab"} onClick={() => setHistoryFilter("archived")}>Archived</button>
+                </div>
+              </div>
+
+              {complaints.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-state-icon"><Icon name="inbox" size={22} /></div>
+                  <div className="empty-state-title">No complaints in this view</div>
+                  <div className="small muted">Submit a complaint to get started.</div>
+                  <button type="button" style={{ marginTop: "10px", width: "auto" }} onClick={() => setActiveView("submit")}>
+                    <Icon name="plus" size={14} /> Submit complaint
+                  </button>
+                </div>
+              ) : null}
+              {complaints.map((c) => renderCard(c))}
+            </section>
+          ) : null}
+
+          {/* ===== TASKS (worker) ===== */}
+          {activeView === "tasks" && isWorkerOrMp ? (
+            <>
+              {workerDashData ? (
+                <section className="card">
+                  <h3>Task overview</h3>
+                  <div className="dashboard-grid dashboard-grid-6">
+                    <div className="dashboard-stat">
+                      <span className="stat-label">Total Assigned</span>
+                      <strong>{workerDashData.stats.totalAssigned}</strong>
+                    </div>
+                    <div className="dashboard-stat">
+                      <span className="stat-label">Active</span>
+                      <strong>{workerDashData.stats.totalPending}</strong>
+                    </div>
+                    <div className={`dashboard-stat ${workerDashData.stats.overdueCount > 0 ? "dashboard-stat-alert" : ""}`}>
+                      <span className="stat-label">Overdue</span>
+                      <strong>{workerDashData.stats.overdueCount}</strong>
+                    </div>
+                    <div className={`dashboard-stat ${workerDashData.stats.dueSoonCount > 0 ? "dashboard-stat-warn" : ""}`}>
+                      <span className="stat-label">Due soon</span>
+                      <strong>{workerDashData.stats.dueSoonCount}</strong>
+                    </div>
+                    <div className="dashboard-stat">
+                      <span className="stat-label">Completed</span>
+                      <strong>{workerDashData.stats.totalCompleted}</strong>
+                    </div>
+                    <div className="dashboard-stat">
+                      <span className="stat-label">Resolved</span>
+                      <strong>{workerDashData.stats.totalResolved}</strong>
+                    </div>
+                  </div>
+                </section>
+              ) : null}
+
+              <section className="card">
+                <h3>Active tasks</h3>
+                {workerDashData && workerDashData.activeComplaints.length > 0 ? (
+                  workerDashData.activeComplaints.map((c) => renderCard(c))
+                ) : (
+                  <div className="empty-state">
+                    <div className="empty-state-icon"><Icon name="check" size={22} /></div>
+                    <div className="empty-state-title">All caught up</div>
+                    <div className="small muted">No active tasks right now — great work.</div>
+                  </div>
+                )}
+              </section>
+
+              {workerDashData && workerDashData.completedComplaints.length > 0 ? (
+                <section className="card">
+                  <h3>Recently completed</h3>
+                  {workerDashData.completedComplaints.slice(0, 8).map((c) => renderCard(c, { showDiscussion: false }))}
+                </section>
+              ) : null}
+            </>
+          ) : null}
+
+          {/* ===== WORKER PROGRESS POST ===== */}
+          {activeView === "progress" && isWorkerOrMp ? (
+            <section className="card">
+              <h3>Post a progress update</h3>
+              <p className="small muted">Describe what you did on site, optionally attach a photo, and mark the task complete when finished.</p>
+
+              {complaints.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-state-icon"><Icon name="inbox" size={22} /></div>
+                  <div className="empty-state-title">No complaints assigned yet</div>
+                  <div className="small muted">You'll see active tasks here when an admin assigns them to you.</div>
                 </div>
               ) : (
-                <div className="small history-item-map-missing">No map location was provided for this complaint.</div>
-              )}
-            </article>
-          );
-        })}
-      </section>
+                <>
+                  <label>Assigned complaint</label>
+                  <select value={workComplaintId} onChange={(e) => setWorkComplaintId(e.target.value)}>
+                    {complaints.map((c) => (
+                      <option key={c._id} value={c.complaintId}>{c.complaintId} — {c.title}</option>
+                    ))}
+                  </select>
 
-      {!isAdmin ? (
-        <section className="card">
-          <h3>Help Center (FAQ)</h3>
-          <p>Common questions for using ComplaintHub.</p>
-          <ul className="faq-list">
-            <li>
-              <strong>Q: How do I sign up?</strong>
-              <div>A: Open the Sign Up page, enter your name, email, optional phone, and a password with at least 6 characters.</div>
-            </li>
-            <li>
-              <strong>Q: How do I log in?</strong>
-              <div>A: Use the Login page with your email or phone and password.</div>
-            </li>
-            <li>
-              <strong>Q: How do I submit a complaint?</strong>
-              <div>A: After logging in, use the Submit Complaint form and keep the generated complaint ID for tracking.</div>
-            </li>
-            <li>
-              <strong>Q: How can I track complaint status?</strong>
-              <div>A: Use the Track Status by Complaint ID section and enter the ID created when the complaint was submitted.</div>
-            </li>
-            <li>
-              <strong>Q: Where can I see old complaints?</strong>
-              <div>A: Use the Complaint History and Archive section and switch between All, Active, and Archived.</div>
-            </li>
-            <li>
-              <strong>Q: Who can update status and priority?</strong>
-              <div>A: Admin users can update complaint status and priority after logging in with admin credentials.</div>
-            </li>
-          </ul>
-        </section>
-      ) : null}
+                  <label>Update details</label>
+                  <textarea rows={4} value={workUpdateText} onChange={(e) => setWorkUpdateText(e.target.value)} placeholder="Describe what you did on site…" />
+
+                  <label>Photo proof (optional, max 5 MB)</label>
+                  <input type="file" accept="image/*" onChange={(e) => setWorkPhotoFile(e.target.files?.[0] || null)} />
+
+                  <div className="worker-actions">
+                    <button type="button" onClick={() => submitWorkerUpdate({ markCompleted: false })}>
+                      <Icon name="upload" size={14} /> Submit update
+                    </button>
+                    <button type="button" className="secondary-button" onClick={() => submitWorkerUpdate({ markCompleted: true })}>
+                      <Icon name="check" size={14} /> Mark task complete
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {workMessage ? <div className="small" style={{ marginTop: "10px" }}>{workMessage}</div> : null}
+            </section>
+          ) : null}
+
+          {/* ===== ADMIN: COMPLAINTS (search + filter + history) ===== */}
+          {activeView === "complaints" && isAdmin ? (
+            <>
+              <section className="card">
+                <div className="section-heading">
+                  <div>
+                    <h3>Search &amp; filter</h3>
+                    <p className="small muted">Combine filters to find complaints instantly.</p>
+                  </div>
+                  <button type="button" className="secondary-button" onClick={() => setShowFilterPanel(!showFilterPanel)}>
+                    <Icon name="filter" size={14} /> {showFilterPanel ? "Hide" : "Show"} filters
+                  </button>
+                </div>
+
+                {activeFilterChips.length > 0 ? (
+                  <div className="filter-chips">
+                    {activeFilterChips.map((chip) => (
+                      <button type="button" key={chip.label} className="chip" onClick={chip.clear}>
+                        {chip.label} ×
+                      </button>
+                    ))}
+                    <button type="button" className="chip chip-clear" onClick={handleClearFilters}>Clear all</button>
+                  </div>
+                ) : null}
+
+                {showFilterPanel ? (
+                  <form onSubmit={handleFilterSearch} className="filter-form">
+                    <div className="filter-grid">
+                      <div>
+                        <label>Status</label>
+                        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+                          <option value="">All</option>
+                          {STATUS_VALUES.map((s) => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label>Category</label>
+                        <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
+                          <option value="">All</option>
+                          {CATEGORY_VALUES.map((c) => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label>Priority</label>
+                        <select value={filterPriority} onChange={(e) => setFilterPriority(e.target.value)}>
+                          <option value="">All</option>
+                          {PRIORITY_VALUES.map((p) => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label>Area / Location</label>
+                        <input value={filterArea} onChange={(e) => setFilterArea(e.target.value)} placeholder="e.g., Dhaka" />
+                      </div>
+                      <div>
+                        <label>Date from</label>
+                        <input type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)} />
+                      </div>
+                      <div>
+                        <label>Date to</label>
+                        <input type="date" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)} />
+                      </div>
+                      <div>
+                        <label>Assignee</label>
+                        <select value={filterAssignee} onChange={(e) => setFilterAssignee(e.target.value)}>
+                          <option value="">Anyone</option>
+                          <option value="unassigned">Unassigned</option>
+                          {users.filter((u) => ["Worker", "MP"].includes(u.role)).map((u) => (
+                            <option key={u.id} value={u.id}>{u.fullName} ({u.role})</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <label>Keyword</label>
+                    <input value={filterKeyword} onChange={(e) => setFilterKeyword(e.target.value)} placeholder="Search titles and descriptions…" />
+
+                    <div className="filter-actions">
+                      <button type="submit"><Icon name="search" size={14} /> Search</button>
+                      <button type="button" className="secondary-button" onClick={handleClearFilters}>Clear</button>
+                    </div>
+                  </form>
+                ) : null}
+
+                {filterMessage ? <div className="small" style={{ marginTop: "10px" }}>{filterMessage}</div> : null}
+
+                {filterRan && filterResults.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="empty-state-icon"><Icon name="search" size={22} /></div>
+                    <div className="empty-state-title">No matching complaints</div>
+                    <div className="small muted">Try adjusting or clearing some filters.</div>
+                  </div>
+                ) : null}
+
+                {filterResults.length > 0 ? (
+                  <div className="filter-results">
+                    {filterResults.map((c) => renderCard(c))}
+                  </div>
+                ) : null}
+              </section>
+
+              <section className="card history-archive-card">
+                <div className="section-heading">
+                  <div>
+                    <h3>All complaints</h3>
+                    <p className="small muted">Full list. Expand a card to join the discussion.</p>
+                  </div>
+                  <div className="filter-row">
+                    <button type="button" className={historyFilter === "all" ? "tab active" : "tab"} onClick={() => setHistoryFilter("all")}>All</button>
+                    <button type="button" className={historyFilter === "active" ? "tab active" : "tab"} onClick={() => setHistoryFilter("active")}>Active</button>
+                    <button type="button" className={historyFilter === "archived" ? "tab active" : "tab"} onClick={() => setHistoryFilter("archived")}>Archived</button>
+                  </div>
+                </div>
+
+                {complaints.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="empty-state-icon"><Icon name="inbox" size={22} /></div>
+                    <div className="empty-state-title">No complaints in this view</div>
+                  </div>
+                ) : null}
+                {complaints.map((c) => renderCard(c))}
+              </section>
+            </>
+          ) : null}
+
+          {/* ===== ADMIN: USERS ===== */}
+          {activeView === "users" && isAdmin ? (
+            <section className="card">
+              <h3>User management</h3>
+              <p className="small muted">Assign roles as Citizen, Worker, MP, or Admin for any registered user.</p>
+              {userAdminMessage ? <div className="small" style={{ marginBottom: "8px" }}>{userAdminMessage}</div> : null}
+              {users.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-state-icon"><Icon name="users" size={22} /></div>
+                  <div className="empty-state-title">No users available</div>
+                </div>
+              ) : null}
+              <div className="user-list">
+                {users.map((user) => (
+                  <article key={user.id} className="user-item">
+                    <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                      <div className={`avatar avatar-${roleKey(user.role)}`}>{user.fullName?.[0]?.toUpperCase() || "U"}</div>
+                      <div>
+                        <strong>{user.fullName}</strong>
+                        <div className="small muted">{user.email || user.phone || "No contact info"}</div>
+                        <div className="small">
+                          <span className={`pill pill-role pill-role-${roleKey(user.role)}`}>{user.role}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="user-actions">
+                      <select
+                        value={roleSelections[user.id] || user.role}
+                        onChange={(e) => setRoleSelections((prev) => ({ ...prev, [user.id]: e.target.value }))}
+                      >
+                        {ROLE_ASSIGN_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                      <button type="button" onClick={() => handleRoleUpdate(user.id)}>Save</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {/* ===== ADMIN: CONTROLS ===== */}
+          {activeView === "controls" && isAdmin ? (
+            <>
+              <section className="card">
+                <h3>Complaint controls</h3>
+                <p className="small muted">Update status, priority, or deadline for any complaint by ID.</p>
+                <label>Complaint ID</label>
+                <input value={adminId} onChange={(e) => setAdminId(e.target.value)} placeholder="CMP-YYYYMMDD-XXXXXX" />
+
+                <div className="admin-action-grid">
+                  <form onSubmit={handleAdminUpdate} className="admin-action">
+                    <label>New status</label>
+                    <select value={adminStatus} onChange={(e) => setAdminStatus(e.target.value)}>
+                      {STATUS_VALUES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <button type="submit">Update status</button>
+                  </form>
+
+                  <form onSubmit={handlePriorityUpdate} className="admin-action">
+                    <label>Priority</label>
+                    <select value={adminPriority} onChange={(e) => setAdminPriority(e.target.value)}>
+                      {PRIORITY_VALUES.map((p) => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                    <button type="submit">Update priority</button>
+                  </form>
+
+                  <form onSubmit={handleDeadlineUpdate} className="admin-action">
+                    <label>Deadline</label>
+                    <input type="date" value={adminDeadline} onChange={(e) => setAdminDeadline(e.target.value)} />
+                    <button type="submit">Save deadline</button>
+                  </form>
+                </div>
+                {adminMessage ? <div className="small" style={{ marginTop: "10px" }}>{adminMessage}</div> : null}
+              </section>
+
+              <section className="card">
+                <h3>Assign to worker or MP</h3>
+                <p className="small muted">Route a complaint and optionally set a deadline.</p>
+                <form onSubmit={handleAssignComplaint}>
+                  <label>Complaint ID</label>
+                  <input value={adminId} onChange={(e) => setAdminId(e.target.value)} required />
+
+                  <label>Assignee</label>
+                  <select value={assigneeUserId} onChange={(e) => setAssigneeUserId(e.target.value)} required>
+                    <option value="" disabled>Select worker or MP</option>
+                    {users.filter((u) => ["Worker", "MP"].includes(u.role)).map((u) => (
+                      <option key={u.id} value={u.id}>{u.fullName} ({u.role})</option>
+                    ))}
+                  </select>
+
+                  <label>Deadline (optional)</label>
+                  <input type="date" value={assignDeadline} onChange={(e) => setAssignDeadline(e.target.value)} />
+
+                  <button type="submit" disabled={!assigneeUserId}>
+                    <Icon name="send" size={14} /> Assign complaint
+                  </button>
+                </form>
+                {assignMessage ? <div className="small" style={{ marginTop: "10px" }}>{assignMessage}</div> : null}
+                {users.filter((u) => ["Worker", "MP"].includes(u.role)).length === 0 ? (
+                  <div className="small muted" style={{ marginTop: "10px" }}>
+                    No Worker or MP users yet. Promote accounts under Users first.
+                  </div>
+                ) : null}
+              </section>
+            </>
+          ) : null}
+
+          {/* ===== ADMIN: REPORTS ===== */}
+          {activeView === "reports" && isAdmin ? (
+            <section className="card">
+              <div className="section-heading">
+                <div>
+                  <h3>Category-wise reports</h3>
+                  <p className="small muted">Breakdown of complaints by category with resolution statistics.</p>
+                </div>
+                <button type="button" className="secondary-button" onClick={() => loadCategoryReports()}>
+                  Refresh
+                </button>
+              </div>
+
+              <CategoryReportsChart reports={categoryReports} />
+
+              {categoryReports.length > 0 ? (
+                <div className="category-reports-table-wrap">
+                  <table className="category-reports-table">
+                    <thead>
+                      <tr>
+                        <th>Category</th><th>Total</th><th>Pending</th><th>Assigned</th>
+                        <th>In Progress</th><th>Resolved</th><th>Rejected</th><th>Resolution %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {categoryReports.map((r) => (
+                        <tr key={r.category}>
+                          <td>{r.category}</td>
+                          <td><strong>{r.total}</strong></td>
+                          <td>{r.pending}</td>
+                          <td>{r.assigned}</td>
+                          <td>{r.inProgress}</td>
+                          <td>{r.resolved}</td>
+                          <td>{r.rejected}</td>
+                          <td>
+                            <div className="resolution-bar-wrap">
+                              <div className="resolution-bar" style={{ width: `${r.resolutionRate}%` }} />
+                              <span>{r.resolutionRate}%</span>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <div className="empty-state-icon"><Icon name="chart" size={22} /></div>
+                  <div className="empty-state-title">No data available yet</div>
+                  <div className="small muted">Reports populate as citizens submit complaints.</div>
+                </div>
+              )}
+            </section>
+          ) : null}
+
+          {/* ===== HELP ===== */}
+          {activeView === "help" ? (
+            <section className="card">
+              <h3>Help Center</h3>
+              <p className="small muted">Answers to the most common questions about ComplaintHub.</p>
+              <FaqAccordion items={isAdmin ? FAQ_ADMIN : isWorkerOrMp ? FAQ_WORKER : FAQ_CITIZEN} />
+            </section>
+          ) : null}
+        </main>
+      </div>
     </div>
   );
 }

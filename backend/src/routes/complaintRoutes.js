@@ -12,6 +12,7 @@ import {
   getComplaintMapLocations,
   getComplaintStatusById,
   getWorkerDashboard,
+  updateComplaintDeadline,
   updateComplaintPriority,
   updateComplaintStatus,
   getSimilarComplaints
@@ -34,5 +35,6 @@ router.get("/:complaintId/comments", getComments);
 router.get("/:complaintId/status", getComplaintStatusById);
 router.patch("/:complaintId/status", updateComplaintStatus);
 router.patch("/:complaintId/priority", updateComplaintPriority);
+router.patch("/:complaintId/deadline", updateComplaintDeadline);
 
 export default router;

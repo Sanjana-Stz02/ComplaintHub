@@ -142,6 +142,7 @@ export const getComplaintStatusById = async (req, res) => {
       submissionPhoto: complaint.submissionPhoto,
       assignedTo: complaint.assignedTo,
       workerTaskCompleted: complaint.workerTaskCompleted,
+      deadline: complaint.deadline,
       progressLogs: complaint.progressLogs,
       comments: complaint.comments,
       updatedAt: complaint.updatedAt,
@@ -314,7 +315,7 @@ export const updateComplaintPriority = async (req, res) => {
 export const assignComplaint = async (req, res) => {
   try {
     const { complaintId } = req.params;
-    const { adminId, assigneeUserId } = req.body;
+    const { adminId, assigneeUserId, deadline } = req.body;
 
     const admin = await requireAdminUser(adminId);
 
@@ -332,12 +333,24 @@ export const assignComplaint = async (req, res) => {
       return res.status(400).json({ message: "Complaints can only be assigned to users with Worker or MP role." });
     }
 
+    const update = {
+      assignedTo: assignee._id,
+      status: "Assigned"
+    };
+
+    if (deadline !== undefined && deadline !== null && `${deadline}`.trim().length > 0) {
+      const parsed = new Date(deadline);
+
+      if (Number.isNaN(parsed.getTime())) {
+        return res.status(400).json({ message: "Invalid deadline date." });
+      }
+
+      update.deadline = parsed;
+    }
+
     const complaint = await Complaint.findOneAndUpdate(
       { complaintId },
-      {
-        assignedTo: assignee._id,
-        status: "Assigned"
-      },
+      update,
       { new: true }
     )
       .populate("assignedTo", "fullName email phone role")
@@ -347,15 +360,17 @@ export const assignComplaint = async (req, res) => {
       return res.status(404).json({ message: "Complaint not found." });
     }
 
-    // Notify the assigned worker/MP
+    const deadlineSuffix = complaint.deadline
+      ? ` Deadline: ${new Date(complaint.deadline).toLocaleDateString()}.`
+      : "";
+
     await Notification.create({
       userId: assignee._id,
       complaintId: complaint.complaintId,
-      message: `You have been assigned to complaint "${complaint.title}".`,
+      message: `You have been assigned to complaint "${complaint.title}".${deadlineSuffix}`,
       type: "assignment"
     });
 
-    // Notify the complaint owner
     await Notification.create({
       userId: complaint.citizenId._id || complaint.citizenId,
       complaintId: complaint.complaintId,
@@ -366,6 +381,59 @@ export const assignComplaint = async (req, res) => {
     return res.status(200).json(complaint);
   } catch (error) {
     return res.status(500).json({ message: "Failed to assign complaint.", error: error.message });
+  }
+};
+
+export const updateComplaintDeadline = async (req, res) => {
+  try {
+    const { complaintId } = req.params;
+    const { adminId, deadline } = req.body;
+
+    const admin = await requireAdminUser(adminId);
+
+    if (!admin) {
+      return res.status(403).json({ message: "Only admins can change complaint deadlines." });
+    }
+
+    let parsedDeadline = null;
+
+    if (deadline !== undefined && deadline !== null && `${deadline}`.trim().length > 0) {
+      const parsed = new Date(deadline);
+
+      if (Number.isNaN(parsed.getTime())) {
+        return res.status(400).json({ message: "Invalid deadline date." });
+      }
+
+      parsedDeadline = parsed;
+    }
+
+    const complaint = await Complaint.findOneAndUpdate(
+      { complaintId },
+      { deadline: parsedDeadline },
+      { new: true }
+    )
+      .populate("assignedTo", "fullName email phone role")
+      .populate("citizenId", "fullName email phone role");
+
+    if (!complaint) {
+      return res.status(404).json({ message: "Complaint not found." });
+    }
+
+    if (complaint.assignedTo) {
+      const assignedId = complaint.assignedTo._id || complaint.assignedTo;
+      await Notification.create({
+        userId: assignedId,
+        complaintId: complaint.complaintId,
+        message: parsedDeadline
+          ? `Deadline for "${complaint.title}" set to ${parsedDeadline.toLocaleDateString()}.`
+          : `Deadline removed for "${complaint.title}".`,
+        type: "assignment"
+      });
+    }
+
+    return res.status(200).json(complaint);
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to update deadline.", error: error.message });
   }
 };
 
@@ -419,6 +487,19 @@ export const addProgressUpdate = async (req, res) => {
 
     await complaint.save();
 
+    const ownerId = complaint.citizenId?._id || complaint.citizenId;
+
+    if (ownerId && ownerId.toString() !== workerId) {
+      await Notification.create({
+        userId: ownerId,
+        complaintId: complaint.complaintId,
+        message: wantsComplete
+          ? `${worker.fullName} marked your complaint "${complaint.title}" as completed.`
+          : `${worker.fullName} posted an update on your complaint "${complaint.title}".`,
+        type: "progress_update"
+      });
+    }
+
     const populated = await Complaint.findById(complaint._id)
       .populate("assignedTo", "fullName email phone role")
       .populate("citizenId", "fullName email phone role");
@@ -453,7 +534,7 @@ export const getSimilarComplaints = async (req, res) => {
 
 export const filterComplaints = async (req, res) => {
   try {
-    const { status, category, priority, area, dateFrom, dateTo, keyword } = req.query;
+    const { status, category, priority, area, dateFrom, dateTo, keyword, assignee } = req.query;
     const filter = {};
 
     if (status && STATUS_VALUES.includes(status)) {
@@ -466,6 +547,12 @@ export const filterComplaints = async (req, res) => {
 
     if (priority && PRIORITY_VALUES.includes(priority)) {
       filter.priority = priority;
+    }
+
+    if (assignee === "unassigned") {
+      filter.assignedTo = null;
+    } else if (assignee && mongoose.Types.ObjectId.isValid(assignee)) {
+      filter.assignedTo = assignee;
     }
 
     if (area && area.trim().length >= 2) {
@@ -656,6 +743,9 @@ export const getWorkerDashboard = async (req, res) => {
       .sort({ updatedAt: -1 })
       .limit(20);
 
+    const now = new Date();
+    const dueSoonThreshold = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
     const stats = await Complaint.aggregate([
       { $match: { assignedTo: new mongoose.Types.ObjectId(workerId) } },
       {
@@ -666,16 +756,56 @@ export const getWorkerDashboard = async (req, res) => {
           totalPending: {
             $sum: { $cond: [{ $in: ["$status", ["Assigned", "In Progress"]] }, 1, 0] }
           },
-          totalResolved: { $sum: { $cond: [{ $eq: ["$status", "Resolved"] }, 1, 0] } }
+          totalResolved: { $sum: { $cond: [{ $eq: ["$status", "Resolved"] }, 1, 0] } },
+          overdueCount: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $in: ["$status", ["Assigned", "In Progress"]] },
+                    { $ne: ["$deadline", null] },
+                    { $lt: ["$deadline", now] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          dueSoonCount: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $in: ["$status", ["Assigned", "In Progress"]] },
+                    { $ne: ["$deadline", null] },
+                    { $gte: ["$deadline", now] },
+                    { $lte: ["$deadline", dueSoonThreshold] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          }
         }
       }
     ]);
+
+    const baseStats = {
+      totalAssigned: 0,
+      totalCompleted: 0,
+      totalPending: 0,
+      totalResolved: 0,
+      overdueCount: 0,
+      dueSoonCount: 0
+    };
 
     return res.status(200).json({
       worker: { id: worker._id, fullName: worker.fullName, role: worker.role },
       activeComplaints: assigned,
       completedComplaints: completed,
-      stats: stats[0] || { totalAssigned: 0, totalCompleted: 0, totalPending: 0, totalResolved: 0 }
+      stats: { ...baseStats, ...(stats[0] || {}) }
     });
   } catch (error) {
     return res.status(500).json({ message: "Failed to load worker dashboard.", error: error.message });

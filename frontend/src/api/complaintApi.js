@@ -181,13 +181,29 @@ export const getUsers = async (requesterId) => {
   return response.json();
 };
 
-export const assignComplaint = async (complaintId, { adminId, assigneeUserId }) => {
+export const assignComplaint = async (complaintId, { adminId, assigneeUserId, deadline }) => {
   const response = await fetch(`${API_BASE_URL}/complaints/${encodeURIComponent(complaintId)}/assign`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ adminId, assigneeUserId })
+    body: JSON.stringify({ adminId, assigneeUserId, deadline })
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return response.json();
+};
+
+export const updateComplaintDeadline = async (complaintId, { adminId, deadline }) => {
+  const response = await fetch(`${API_BASE_URL}/complaints/${encodeURIComponent(complaintId)}/deadline`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ adminId, deadline })
   });
 
   if (!response.ok) {
@@ -239,6 +255,7 @@ export const filterComplaints = async (params) => {
   if (params.dateFrom) query.set("dateFrom", params.dateFrom);
   if (params.dateTo) query.set("dateTo", params.dateTo);
   if (params.keyword) query.set("keyword", params.keyword);
+  if (params.assignee) query.set("assignee", params.assignee);
 
   const response = await fetch(`${API_BASE_URL}/complaints/filter?${query.toString()}`);
 
