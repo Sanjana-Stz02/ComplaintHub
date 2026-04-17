@@ -51,6 +51,30 @@ Local problem reporting system built with the MERN stack and an MVC-style layout
 
 - **FAQ** section for citizens and workers (not shown on admin-only-focused copy where applicable).
 
+### Analytics and reporting (Admins)
+
+- **Analytics dashboard:** 14-day complaint volume, resolution rate, average resolution time, status/priority/category breakdowns, worker performance, and average citizen rating.
+- **Category reports:** resolution rate per category with horizontal bars.
+- **Exports:** download the current filtered complaint set as **CSV** or **PDF** directly from **Reports** or **Analytics**.
+
+### Citizen feedback and rating
+
+- After a complaint is **Resolved**, the complaint owner can submit a **1–5 star rating** with an optional comment.
+- Ratings show as pills on complaint cards and feed into the admin analytics dashboard.
+
+### Deadline and SLA tracking
+
+- Admins can set or edit a complaint **deadline** during assignment or later from **Controls**.
+- Worker dashboard highlights **Overdue** and **Due soon** tasks; notifications are sent when a deadline changes.
+
+### Role-Based Access Control (RBAC)
+
+- **Citizen:** submit, track, comment, submit feedback on own complaints.
+- **Worker / MP:** view & update assigned complaints, post progress, comment.
+- **Admin:** everything above, plus assign, update status/priority/deadline, view reports/analytics, export, search & filter.
+- **Super Admin:** all admin capabilities, plus assign roles.
+- All admin endpoints (`filter`, `category-reports`, `analytics`, `export/csv`, `export/pdf`, status/priority/deadline/assign) enforce the caller's role server-side via `requesterId` / `adminId`.
+
 ---
 
 ## Project structure
@@ -109,6 +133,16 @@ Project_demo/
 | GET | `/api/complaints/:complaintId/status` | Public read by complaint ID |
 | PATCH | `/api/complaints/:complaintId/status` | Admin only (`adminId` + `status`) |
 | PATCH | `/api/complaints/:complaintId/priority` | Admin only (`adminId` + `priority`) |
+| PATCH | `/api/complaints/:complaintId/deadline` | Admin only (`adminId` + `deadline`) |
+| POST | `/api/complaints/:complaintId/comments` | Add discussion comment (any auth'd user) |
+| GET | `/api/complaints/:complaintId/comments` | List discussion comments |
+| POST | `/api/complaints/:complaintId/feedback` | Citizen (owner, after Resolved) submits rating |
+| GET | `/api/complaints/filter` | Admin filter / search (`requesterId`) |
+| GET | `/api/complaints/category-reports` | Admin category breakdown (`requesterId`) |
+| GET | `/api/complaints/worker-dashboard` | Worker/MP stats (`workerId`) |
+| GET | `/api/complaints/analytics` | Admin analytics (`requesterId`) |
+| GET | `/api/complaints/export/csv` | Admin CSV export (`requesterId` + filters) |
+| GET | `/api/complaints/export/pdf` | Admin PDF export (`requesterId` + filters) |
 
 Auth routes remain under `/api/auth/*` (signup, login, OTP, users, role patch).
 

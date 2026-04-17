@@ -3,7 +3,10 @@ import {
   addProgressUpdate,
   assignComplaint,
   createComplaint,
+  exportComplaintsCsv,
+  exportComplaintsPdf,
   filterComplaints,
+  getAnalytics,
   getCategoryReports,
   getComplaintHistory,
   getComplaintStatus,
@@ -31,6 +34,8 @@ import ComplaintCard from "./components/ComplaintCard.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import Topbar from "./components/Topbar.jsx";
 import Icon from "./components/Icon.jsx";
+import AnalyticsDashboard from "./components/AnalyticsDashboard.jsx";
+import FeedbackForm from "./components/FeedbackForm.jsx";
 import {
   deadlineBadge,
   formatDate,
@@ -55,6 +60,7 @@ const FAQ_CITIZEN = [
   { q: "How do I track a complaint?", a: "Open Track and enter the complaint ID. You'll see a visual progress timeline, the assigned worker, and a discussion thread." },
   { q: "How do notifications work?", a: "Click the bell in the header. You'll see real-time updates on status changes, assignments, comments, and worker progress." },
   { q: "Where are my past complaints?", a: "Open History and switch between All, Active, and Archived tabs to see every complaint you've filed." },
+  { q: "How do I leave feedback?", a: "Once your complaint is Resolved, open Track and submit a star rating with an optional comment. Feedback helps us improve the service." },
   { q: "Can I discuss a complaint with workers or admins?", a: "Yes. Expand any complaint card and use the Discussion section \u2014 everyone involved can post updates." },
   { q: "What's the OTP login for?", a: "Instead of a password, request a one-time passcode by email. Useful if you forget your password." }
 ];
@@ -62,13 +68,17 @@ const FAQ_CITIZEN = [
 const FAQ_WORKER = [
   { q: "Where are my assigned tasks?", a: "Open Tasks. You'll see active tasks with deadlines, priority, and overdue/due-soon highlighting." },
   { q: "How do I post a progress update?", a: "Go to Progress, pick the complaint, add a note and optional photo, then submit. Mark 'complete' when the task is finished." },
-  { q: "Can I comment on a complaint?", a: "Yes. Expand any task card and use the Discussion section to communicate with the citizen and admins." }
+  { q: "Can I comment on a complaint?", a: "Yes. Expand any task card and use the Discussion section to communicate with the citizen and admins." },
+  { q: "What happens when I complete a task?", a: "After the admin marks the complaint Resolved, the citizen can leave a rating. You'll get a notification when that happens." }
 ];
 
 const FAQ_ADMIN = [
   { q: "How do I assign a complaint?", a: "Open Controls \u2192 Assign. Enter the complaint ID, pick a worker or MP, and optionally set a deadline." },
   { q: "How do deadlines work?", a: "Deadlines help workers prioritize. Overdue tasks are flagged red on the worker dashboard and notifications are sent when a deadline changes." },
+  { q: "What does Analytics show?", a: "Analytics shows complaint volume over time, resolution rate, average resolution time, status/priority/category breakdowns, worker performance, and citizen ratings." },
+  { q: "How do I export reports?", a: "Open Reports and click Export CSV or Export PDF. Any filters you've applied in Complaints are carried over to the export." },
   { q: "Where are categorized reports?", a: "Reports shows a chart and breakdown (pending, assigned, in progress, resolved, rejected, resolution rate) by category." },
+  { q: "How does RBAC work?", a: "Citizens can only submit and track their own complaints. Workers/MPs see only assigned tasks. Admins can manage everything. Super Admins can additionally assign roles." },
   { q: "How do I filter complaints?", a: "Open Complaints. Combine status, category, priority, area, assignee, date range, and keywords. Active filters show as dismissible chips." }
 ];
 
@@ -159,6 +169,12 @@ export default function App() {
   // Dashboards
   const [workerDashData, setWorkerDashData] = useState(null);
   const [categoryReports, setCategoryReports] = useState([]);
+  const [analyticsData, setAnalyticsData] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+
+  // Exports
+  const [exportMessage, setExportMessage] = useState("");
+  const [exporting, setExporting] = useState(false);
 
   // UI
   const [expandedCommentId, setExpandedCommentId] = useState("");
@@ -220,8 +236,16 @@ export default function App() {
 
   const loadCategoryReports = async (user = currentUser) => {
     if (!user || !["Admin", "Super Admin"].includes(user.role)) { setCategoryReports([]); return; }
-    try { setCategoryReports(await getCategoryReports()); }
+    try { setCategoryReports(await getCategoryReports(user.id)); }
     catch { setCategoryReports([]); }
+  };
+
+  const loadAnalytics = async (user = currentUser) => {
+    if (!user || !["Admin", "Super Admin"].includes(user.role)) { setAnalyticsData(null); return; }
+    setAnalyticsLoading(true);
+    try { setAnalyticsData(await getAnalytics(user.id)); }
+    catch { setAnalyticsData(null); }
+    finally { setAnalyticsLoading(false); }
   };
 
   useEffect(() => { if (currentUser) loadComplaints(); }, [currentUser, historyFilter]);
@@ -234,6 +258,7 @@ export default function App() {
   }, [currentUser]);
   useEffect(() => { if (currentUser) loadWorkerDashboard(); }, [currentUser]);
   useEffect(() => { if (currentUser) loadCategoryReports(); }, [currentUser]);
+  useEffect(() => { if (currentUser) loadAnalytics(); }, [currentUser]);
 
   // Similarity suggestions while typing
   useEffect(() => {
@@ -260,11 +285,12 @@ export default function App() {
     if (isAdmin) {
       return [
         { id: "overview", label: "Overview", icon: "dashboard" },
+        { id: "analytics", label: "Analytics", icon: "chart" },
         { id: "complaints", label: "Complaints", icon: "search" },
         { id: "track", label: "Track", icon: "map" },
         { id: "users", label: "Users", icon: "users" },
         { id: "controls", label: "Controls", icon: "settings" },
-        { id: "reports", label: "Reports", icon: "chart" },
+        { id: "reports", label: "Reports", icon: "upload" },
         { id: "help", label: "Help", icon: "help" }
       ];
     }
@@ -367,6 +393,7 @@ export default function App() {
     setOtpCode(""); setOtpPreview("");
     setNotifications([]); setUnreadCount(0); setShowNotifications(false);
     setWorkerDashData(null); setCategoryReports([]);
+    setAnalyticsData(null); setExportMessage(""); setExporting(false);
     setFilterResults([]); setFilterMessage(""); setExpandedCommentId("");
     setActiveView("overview");
     window.localStorage.removeItem(STORAGE_KEY);
@@ -554,19 +581,46 @@ export default function App() {
     } catch (error) { setWorkMessage(error.message); }
   };
 
+  const buildFilterPayload = () => ({
+    requesterId: currentUser?.id,
+    status: filterStatus,
+    category: filterCategory,
+    priority: filterPriority,
+    area: filterArea,
+    dateFrom: filterDateFrom,
+    dateTo: filterDateTo,
+    keyword: filterKeyword,
+    assignee: filterAssignee
+  });
+
   const handleFilterSearch = async (event) => {
     event.preventDefault();
     setFilterMessage(""); setFilterRan(true);
     try {
-      const results = await filterComplaints({
-        status: filterStatus, category: filterCategory,
-        priority: filterPriority, area: filterArea,
-        dateFrom: filterDateFrom, dateTo: filterDateTo,
-        keyword: filterKeyword, assignee: filterAssignee
-      });
+      const results = await filterComplaints(buildFilterPayload());
       setFilterResults(results);
       setFilterMessage(`Found ${results.length} complaint${results.length === 1 ? "" : "s"}.`);
     } catch (error) { setFilterMessage(error.message); setFilterResults([]); }
+  };
+
+  const handleExport = async (format) => {
+    setExportMessage(""); setExporting(true);
+    try {
+      const payload = buildFilterPayload();
+      if (format === "csv") await exportComplaintsCsv(payload);
+      else await exportComplaintsPdf(payload);
+      setExportMessage(`${format.toUpperCase()} download started.`);
+    } catch (error) { setExportMessage(error.message); }
+    finally { setExporting(false); }
+  };
+
+  const handleFeedbackSubmitted = async () => {
+    if (trackedComplaint) {
+      try { setTrackedComplaint(await getComplaintStatus(trackedComplaint.complaintId)); }
+      catch {}
+    }
+    await loadComplaints();
+    await loadAnalytics();
   };
 
   const handleClearFilters = () => {
@@ -604,6 +658,7 @@ export default function App() {
       expandedCommentId={expandedCommentId}
       onToggleDiscussion={toggleExpandComments}
       onTrack={handleTrackFromCard}
+      onFeedbackSubmitted={handleFeedbackSubmitted}
       {...extra}
     />
   );
@@ -765,7 +820,8 @@ export default function App() {
     progress: { title: "Post a Progress Update", subtitle: "Log progress, attach proof, and mark tasks complete." },
     users: { title: "User Management", subtitle: "Assign roles across Citizen, Worker, MP, and Admin." },
     controls: { title: "Complaint Controls", subtitle: "Update status, priority, deadlines, and assign work." },
-    reports: { title: "Category Reports", subtitle: "Breakdown of complaints by category and resolution rate." },
+    analytics: { title: "Analytics Dashboard", subtitle: "Volume, resolution times, worker performance and citizen ratings." },
+    reports: { title: "Reports & Exports", subtitle: "Category breakdown, resolution rate, and CSV / PDF exports." },
     help: { title: "Help Center", subtitle: "Answers to common questions." }
   };
   const meta = topbarTitles[activeView] || topbarTitles.overview;
@@ -1099,6 +1155,12 @@ export default function App() {
                       </ul>
                     </div>
                   ) : null}
+
+                  <FeedbackForm
+                    complaint={trackedComplaint}
+                    currentUser={currentUser}
+                    onSubmitted={handleFeedbackSubmitted}
+                  />
 
                   <div className="tracked-discussion">
                     <InlineComments complaintId={trackedComplaint.complaintId} currentUser={currentUser} />
@@ -1468,6 +1530,43 @@ export default function App() {
           ) : null}
 
           {/* ===== ADMIN: REPORTS ===== */}
+          {activeView === "analytics" && isAdmin ? (
+            <section className="card">
+              <div className="section-heading">
+                <div>
+                  <h3>Analytics dashboard</h3>
+                  <p className="small muted">Platform health across volume, resolution times, and citizen satisfaction.</p>
+                </div>
+                <div className="export-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => handleExport("csv")}
+                    disabled={exporting}
+                  >
+                    <Icon name="download" size={14} /> CSV
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => handleExport("pdf")}
+                    disabled={exporting}
+                  >
+                    <Icon name="download" size={14} /> PDF
+                  </button>
+                </div>
+              </div>
+              {exportMessage ? (
+                <div className="small muted" style={{ marginBottom: 8 }}>{exportMessage}</div>
+              ) : null}
+              <AnalyticsDashboard
+                data={analyticsData}
+                onRefresh={() => loadAnalytics()}
+                loading={analyticsLoading}
+              />
+            </section>
+          ) : null}
+
           {activeView === "reports" && isAdmin ? (
             <section className="card">
               <div className="section-heading">
@@ -1475,10 +1574,37 @@ export default function App() {
                   <h3>Category-wise reports</h3>
                   <p className="small muted">Breakdown of complaints by category with resolution statistics.</p>
                 </div>
-                <button type="button" className="secondary-button" onClick={() => loadCategoryReports()}>
-                  Refresh
-                </button>
+                <div className="export-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => handleExport("csv")}
+                    disabled={exporting}
+                  >
+                    <Icon name="download" size={14} /> Export CSV
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => handleExport("pdf")}
+                    disabled={exporting}
+                  >
+                    <Icon name="download" size={14} /> Export PDF
+                  </button>
+                  <button type="button" className="secondary-button" onClick={() => loadCategoryReports()}>
+                    Refresh
+                  </button>
+                </div>
               </div>
+
+              {exportMessage ? (
+                <div className="small muted" style={{ marginBottom: 8 }}>{exportMessage}</div>
+              ) : null}
+              {filterRan ? (
+                <div className="small muted" style={{ marginBottom: 8 }}>
+                  Exports use the filters you applied in <strong>Complaints</strong>.
+                </div>
+              ) : null}
 
               <CategoryReportsChart reports={categoryReports} />
 

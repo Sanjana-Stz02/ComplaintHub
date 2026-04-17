@@ -248,6 +248,7 @@ export const updateUserRole = async ({ requesterId, userId, role }) => {
 export const filterComplaints = async (params) => {
   const query = new URLSearchParams();
 
+  if (params.requesterId) query.set("requesterId", params.requesterId);
   if (params.status) query.set("status", params.status);
   if (params.category) query.set("category", params.category);
   if (params.priority) query.set("priority", params.priority);
@@ -292,14 +293,87 @@ export const getComments = async (complaintId) => {
   return response.json();
 };
 
-export const getCategoryReports = async () => {
-  const response = await fetch(`${API_BASE_URL}/complaints/category-reports`);
+export const getCategoryReports = async (requesterId) => {
+  const query = requesterId ? `?requesterId=${encodeURIComponent(requesterId)}` : "";
+  const response = await fetch(`${API_BASE_URL}/complaints/category-reports${query}`);
 
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
 
   return response.json();
+};
+
+export const getAnalytics = async (requesterId) => {
+  const response = await fetch(`${API_BASE_URL}/complaints/analytics?requesterId=${encodeURIComponent(requesterId)}`);
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return response.json();
+};
+
+export const submitComplaintFeedback = async (complaintId, { userId, rating, comment }) => {
+  const response = await fetch(`${API_BASE_URL}/complaints/${encodeURIComponent(complaintId)}/feedback`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ userId, rating, comment })
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return response.json();
+};
+
+const buildExportQuery = (params = {}) => {
+  const query = new URLSearchParams();
+  if (params.requesterId) query.set("requesterId", params.requesterId);
+  if (params.status) query.set("status", params.status);
+  if (params.category) query.set("category", params.category);
+  if (params.priority) query.set("priority", params.priority);
+  if (params.area) query.set("area", params.area);
+  if (params.dateFrom) query.set("dateFrom", params.dateFrom);
+  if (params.dateTo) query.set("dateTo", params.dateTo);
+  if (params.keyword) query.set("keyword", params.keyword);
+  if (params.assignee) query.set("assignee", params.assignee);
+  return query.toString();
+};
+
+const downloadBlob = async (url, fallbackName) => {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  const disposition = response.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  const filename = match ? match[1] : fallbackName;
+
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
+};
+
+export const exportComplaintsCsv = async (params) => {
+  const query = buildExportQuery(params);
+  await downloadBlob(`${API_BASE_URL}/complaints/export/csv?${query}`, "complainthub-report.csv");
+};
+
+export const exportComplaintsPdf = async (params) => {
+  const query = buildExportQuery(params);
+  await downloadBlob(`${API_BASE_URL}/complaints/export/pdf?${query}`, "complainthub-report.pdf");
 };
 
 export const getWorkerDashboard = async (workerId) => {
