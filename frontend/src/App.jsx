@@ -36,6 +36,7 @@ import Topbar from "./components/Topbar.jsx";
 import Icon from "./components/Icon.jsx";
 import AnalyticsDashboard from "./components/AnalyticsDashboard.jsx";
 import FeedbackForm from "./components/FeedbackForm.jsx";
+import Toast from "./components/Toast.jsx";
 import {
   deadlineBadge,
   formatDate,
@@ -173,8 +174,12 @@ export default function App() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
   // Exports
-  const [exportMessage, setExportMessage] = useState("");
   const [exporting, setExporting] = useState(false);
+
+  // Toast
+  const [toast, setToast] = useState(null);
+  const pushToast = (message, tone = "info") => setToast({ message, tone });
+  const dismissToast = () => setToast(null);
 
   // UI
   const [expandedCommentId, setExpandedCommentId] = useState("");
@@ -393,7 +398,7 @@ export default function App() {
     setOtpCode(""); setOtpPreview("");
     setNotifications([]); setUnreadCount(0); setShowNotifications(false);
     setWorkerDashData(null); setCategoryReports([]);
-    setAnalyticsData(null); setExportMessage(""); setExporting(false);
+    setAnalyticsData(null); setExporting(false); setToast(null);
     setFilterResults([]); setFilterMessage(""); setExpandedCommentId("");
     setActiveView("overview");
     window.localStorage.removeItem(STORAGE_KEY);
@@ -604,13 +609,13 @@ export default function App() {
   };
 
   const handleExport = async (format) => {
-    setExportMessage(""); setExporting(true);
+    setExporting(true);
     try {
       const payload = buildFilterPayload();
       if (format === "csv") await exportComplaintsCsv(payload);
       else await exportComplaintsPdf(payload);
-      setExportMessage(`${format.toUpperCase()} download started.`);
-    } catch (error) { setExportMessage(error.message); }
+      pushToast(`${format.toUpperCase()} export downloaded.`, "success");
+    } catch (error) { pushToast(error.message, "error"); }
     finally { setExporting(false); }
   };
 
@@ -621,6 +626,7 @@ export default function App() {
     }
     await loadComplaints();
     await loadAnalytics();
+    pushToast("Thanks! Your feedback was recorded.", "success");
   };
 
   const handleClearFilters = () => {
@@ -828,6 +834,11 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {toast ? (
+        <div className="toast-stack">
+          <Toast message={toast.message} tone={toast.tone} onDismiss={dismissToast} />
+        </div>
+      ) : null}
       <Sidebar
         items={navItems}
         activeView={activeView}
@@ -1556,9 +1567,6 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              {exportMessage ? (
-                <div className="small muted" style={{ marginBottom: 8 }}>{exportMessage}</div>
-              ) : null}
               <AnalyticsDashboard
                 data={analyticsData}
                 onRefresh={() => loadAnalytics()}
@@ -1597,9 +1605,6 @@ export default function App() {
                 </div>
               </div>
 
-              {exportMessage ? (
-                <div className="small muted" style={{ marginBottom: 8 }}>{exportMessage}</div>
-              ) : null}
               {filterRan ? (
                 <div className="small muted" style={{ marginBottom: 8 }}>
                   Exports use the filters you applied in <strong>Complaints</strong>.
