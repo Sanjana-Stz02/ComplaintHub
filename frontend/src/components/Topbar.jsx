@@ -20,7 +20,9 @@ export default function Topbar({
   onCloseNotifications,
   onMarkNotificationRead,
   onMarkAllRead,
-  onOpenMobileNav
+  onOpenMobileNav,
+  theme,
+  onToggleTheme
 }) {
   const notifRef = useRef(null);
 
@@ -57,6 +59,17 @@ export default function Topbar({
       </div>
 
       <div className="topbar-right">
+        {onToggleTheme ? (
+          <button
+            type="button"
+            className="icon-button icon-button-ghost theme-toggle"
+            onClick={onToggleTheme}
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            <Icon name={theme === "dark" ? "sun" : "moon"} size={18} />
+          </button>
+        ) : null}
         <div className="notification-wrapper" ref={notifRef}>
           <button
             type="button"

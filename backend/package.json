@@ -5,14 +5,16 @@
   "main": "src/app.js",
   "scripts": {
     "dev": "nodemon src/app.js",
-    "start": "node src/app.js"
+    "start": "node src/app.js",
+    "migrate:mp-to-leader": "node scripts/migrate-mp-to-leader.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "mongoose": "^8.6.2",
-    "nodemailer": "^8.0.2"
+    "nodemailer": "^8.0.2",
+    "pdfkit": "^0.18.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"

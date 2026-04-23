@@ -285,13 +285,20 @@ export const verifyLoginOtp = async (req, res) => {
 export const getUsers = async (req, res) => {
   try {
     const { requesterId } = req.query;
-    const requester = await getAdminRequester(requesterId);
 
-    if (!requester) {
-      return res.status(403).json({ message: "Only admins can view users." });
+    if (!requesterId) {
+      return res.status(403).json({ message: "Only admins or leaders can view users." });
     }
 
-    const users = await User.find()
+    const requester = await User.findById(requesterId);
+
+    if (!requester || !["Admin", "Super Admin", "Leader"].includes(requester.role)) {
+      return res.status(403).json({ message: "Only admins or leaders can view users." });
+    }
+
+    const query = requester.role === "Leader" ? { role: "Worker" } : {};
+
+    const users = await User.find(query)
       .sort({ createdAt: -1 })
       .select("fullName email phone role lastLoginAt createdAt");
 
@@ -312,8 +319,8 @@ export const updateUserRole = async (req, res) => {
       return res.status(403).json({ message: "Only admins can update user roles." });
     }
 
-    if (!["Citizen", "Worker", "MP", "Admin"].includes(role)) {
-      return res.status(400).json({ message: "Role must be Citizen, Worker, MP, or Admin." });
+    if (!["Citizen", "Worker", "Leader", "Admin"].includes(role)) {
+      return res.status(400).json({ message: "Role must be Citizen, Worker, Leader, or Admin." });
     }
 
     const user = await User.findById(userId);

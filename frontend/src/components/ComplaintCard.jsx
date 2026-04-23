@@ -1,5 +1,7 @@
 import ComplaintsMap from "./ComplaintsMap.jsx";
 import InlineComments from "./InlineComments.jsx";
+import StarRating from "./StarRating.jsx";
+import FeedbackForm from "./FeedbackForm.jsx";
 import {
   deadlineBadge,
   formatDate,
@@ -14,7 +16,9 @@ export default function ComplaintCard({
   expandedCommentId,
   onToggleDiscussion,
   onTrack,
+  onFeedbackSubmitted,
   showDiscussion = true,
+  showFeedback = true,
   extraBadges = null,
   children
 }) {
@@ -36,6 +40,11 @@ export default function ComplaintCard({
           <span className={complaint.isArchived ? "archive-pill archived" : "archive-pill active-archive"}>
             {complaint.isArchived ? "Archived" : "Active"}
           </span>
+          {complaint.feedback?.rating ? (
+            <span className="pill pill-rating" title={`${complaint.feedback.rating}/5 rating`}>
+              <StarRating value={complaint.feedback.rating} readOnly size={12} />
+            </span>
+          ) : null}
           {extraBadges}
         </div>
       </div>
@@ -83,6 +92,14 @@ export default function ComplaintCard({
             </button>
           ) : null}
         </div>
+      ) : null}
+
+      {showFeedback ? (
+        <FeedbackForm
+          complaint={complaint}
+          currentUser={currentUser}
+          onSubmitted={onFeedbackSubmitted}
+        />
       ) : null}
 
       {isExpanded ? (

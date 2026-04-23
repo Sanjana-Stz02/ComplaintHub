@@ -53,6 +53,33 @@ const progressLogSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const feedbackSchema = new mongoose.Schema(
+  {
+    rating: {
+      type: Number,
+      required: true,
+      min: 1,
+      max: 5
+    },
+    comment: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+      default: ""
+    },
+    submittedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+    submittedAt: {
+      type: Date,
+      default: Date.now
+    }
+  },
+  { _id: false }
+);
+
 const commentSchema = new mongoose.Schema(
   {
     text: {
@@ -149,7 +176,15 @@ const complaintSchema = new mongoose.Schema(
       default: "Other"
     },
     progressLogs: [progressLogSchema],
-    comments: [commentSchema]
+    comments: [commentSchema],
+    feedback: {
+      type: feedbackSchema,
+      default: null
+    },
+    resolvedAt: {
+      type: Date,
+      default: null
+    }
   },
   { timestamps: true }
 );
